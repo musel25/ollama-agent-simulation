@@ -1,6 +1,18 @@
 import streamlit as st
 from consumer_agent import run_consumer, clear_inter_agent_log
 
+
+def render_content(content: str):
+    if "<think>" in content and "</think>" in content:
+        think = content.split("</think>")[0].replace("<think>", "").strip()
+        answer = content.split("</think>", 1)[1].strip()
+        with st.expander("🧠 Thinking..."):
+            st.write(think)
+        if answer:
+            st.write(answer)
+    else:
+        st.write(content)
+
 st.set_page_config(page_title="Ollama Agent Simulation", layout="wide")
 
 if "chat_history" not in st.session_state:
@@ -22,7 +34,7 @@ with left_col:
 
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
-            st.write(msg["content"])
+            render_content(msg["content"])
 
     user_input = st.chat_input("Ask the consumer agent...")
     if user_input:
@@ -46,9 +58,14 @@ with right_col:
             if entry["from"] == "consumer":
                 with st.chat_message("consumer", avatar="🛒"):
                     st.write(entry["message"])
+            elif entry["from"] == "provider_step":
+                if entry["role"] == "tool_call":
+                    st.code(entry["content"], language="python")
+                else:
+                    st.caption(f"↳ {entry['content']}")
             else:
                 with st.chat_message("provider", avatar="🏪"):
-                    st.write(entry["message"])
+                    render_content(entry["message"])
 
     if st.button("🗑 Clear Log"):
         clear_inter_agent_log()

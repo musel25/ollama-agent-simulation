@@ -19,7 +19,8 @@ def query_provider(question: str) -> str:
         question: The question to ask the provider about product availability or inventory.
     """
     inter_agent_log.append({"from": "consumer", "message": question})
-    answer, _ = run_provider(question, model=_active_model)
+    answer, steps = run_provider(question, model=_active_model)
+    inter_agent_log.extend({"from": "provider_step", **s} for s in steps)
     inter_agent_log.append({"from": "provider", "message": answer})
     return answer
 
@@ -33,7 +34,8 @@ def purchase_from_provider(item: str, quantity: int) -> str:
     """
     message = f"Please remove {quantity} units of {item} from the catalog."
     inter_agent_log.append({"from": "consumer", "message": message})
-    answer, _ = run_provider(message, model=_active_model)
+    answer, steps = run_provider(message, model=_active_model)
+    inter_agent_log.extend({"from": "provider_step", **s} for s in steps)
     inter_agent_log.append({"from": "provider", "message": answer})
     return answer
 
