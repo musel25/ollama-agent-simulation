@@ -8,6 +8,13 @@ if "chat_history" not in st.session_state:
 if "agent_log" not in st.session_state:
     st.session_state.agent_log = []
 
+MODELS = ["qwen3:4b", "qwen3:1.7b"]
+
+with st.sidebar:
+    st.header("⚙️ Settings")
+    selected_model = st.selectbox("Ollama model", MODELS, index=0)
+    st.caption(f"Pull with: `ollama pull {selected_model}`")
+
 left_col, right_col = st.columns(2)
 
 with left_col:
@@ -22,7 +29,7 @@ with left_col:
         st.session_state.chat_history.append({"role": "user", "content": user_input})
 
         with st.spinner("Agents working..."):
-            response, log_snapshot = run_consumer(user_input)
+            response, log_snapshot = run_consumer(user_input, model=selected_model)
 
         st.session_state.chat_history.append({"role": "assistant", "content": response})
         st.session_state.agent_log = log_snapshot

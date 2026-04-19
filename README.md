@@ -15,9 +15,10 @@ Streamlit app simulating two autonomous AI agents — a **Provider** and a **Con
    ```bash
    curl -fsSL https://ollama.com/install.sh | sh
    ```
-2. Pull model:
+2. Pull a model (choose based on your hardware):
    ```bash
-   ollama pull qwen3:4b
+   ollama pull qwen3:4b      # recommended — better reasoning
+   ollama pull qwen3:1.7b    # lighter — faster on low-RAM machines
    ```
 3. Install deps with uv:
    ```bash
@@ -29,6 +30,8 @@ Streamlit app simulating two autonomous AI agents — a **Provider** and a **Con
    ```
 
 No API key required. Ollama starts automatically on Ubuntu — no need to run `ollama serve` manually.
+
+The sidebar in the app lets you switch between models at runtime without restarting.
 
 ## Project Structure
 
