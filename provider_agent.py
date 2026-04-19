@@ -59,7 +59,7 @@ def update_catalog(item: str, quantity_to_remove: int) -> str:
     return f"SUCCESS: removed {quantity_to_remove} units of {name.strip()}. Remaining: {new_qty}."
 
 
-def run_provider(user_message: str) -> tuple[str, list[dict]]:
+def run_provider(user_message: str, model: str = "qwen3:4b") -> tuple[str, list[dict]]:
     messages = [
         {"role": "system", "content": PROVIDER_SYSTEM_PROMPT},
         {"role": "user", "content": user_message},
@@ -68,7 +68,7 @@ def run_provider(user_message: str) -> tuple[str, list[dict]]:
     steps = []
 
     while True:
-        response = ollama.chat(model="qwen3:4b", messages=messages, tools=tools)
+        response = ollama.chat(model=model, messages=messages, tools=tools)
         msg = response.message
 
         if not msg.tool_calls:

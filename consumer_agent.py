@@ -9,6 +9,9 @@ something. Always confirm the result of each purchase to the user."""
 inter_agent_log: list[dict] = []
 
 
+_active_model: str = "qwen3:4b"
+
+
 def query_provider(question: str) -> str:
     """Ask the provider agent about available products and their stock levels.
 
@@ -16,7 +19,7 @@ def query_provider(question: str) -> str:
         question: The question to ask the provider about product availability or inventory.
     """
     inter_agent_log.append({"from": "consumer", "message": question})
-    answer, _ = run_provider(question)
+    answer, _ = run_provider(question, model=_active_model)
     inter_agent_log.append({"from": "provider", "message": answer})
     return answer
 
@@ -30,12 +33,14 @@ def purchase_from_provider(item: str, quantity: int) -> str:
     """
     message = f"Please remove {quantity} units of {item} from the catalog."
     inter_agent_log.append({"from": "consumer", "message": message})
-    answer, _ = run_provider(message)
+    answer, _ = run_provider(message, model=_active_model)
     inter_agent_log.append({"from": "provider", "message": answer})
     return answer
 
 
-def run_consumer(user_message: str) -> tuple[str, list[dict]]:
+def run_consumer(user_message: str, model: str = "qwen3:4b") -> tuple[str, list[dict]]:
+    global _active_model
+    _active_model = model
     messages = [
         {"role": "system", "content": CONSUMER_SYSTEM_PROMPT},
         {"role": "user", "content": user_message},
@@ -43,7 +48,7 @@ def run_consumer(user_message: str) -> tuple[str, list[dict]]:
     tools = [query_provider, purchase_from_provider]
 
     while True:
-        response = ollama.chat(model="qwen3:4b", messages=messages, tools=tools)
+        response = ollama.chat(model=model, messages=messages, tools=tools)
         msg = response.message
 
         if not msg.tool_calls:
