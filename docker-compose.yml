@@ -1,0 +1,116 @@
+services:
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    entrypoint: ["anvil", "--block-time", "1", "--host", "0.0.0.0"]
+    ports:
+      - "8545:8545"
+    healthcheck:
+      test: ["CMD-SHELL", "cast block-number --rpc-url http://localhost:8545 2>/dev/null || exit 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+
+  deployer:
+    image: ghcr.io/foundry-rs/foundry:latest
+    depends_on:
+      anvil:
+        condition: service_healthy
+    volumes:
+      - ./contracts:/app/contracts
+    working_dir: /app/contracts
+    environment:
+      - DEPLOYER_PRIVATE_KEY=${DEPLOYER_PRIVATE_KEY}
+      - PROVIDER_ADDRESS=${PROVIDER_ADDRESS}
+    entrypoint:
+      - forge
+      - script
+      - script/Deploy.s.sol
+      - --rpc-url
+      - http://anvil:8545
+      - --broadcast
+      - --private-key
+      - ${DEPLOYER_PRIVATE_KEY}
+    restart: "no"
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    volumes:
+      - ollama:/root/.ollama
+    entrypoint:
+      - ollama
+      - pull
+      - ${OLLAMA_MODEL:-ministral:3b}
+    restart: "no"
+
+  provider-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.provider
+    depends_on:
+      deployer:
+        condition: service_completed_successfully
+    ports:
+      - "8002:8002"
+      - "8003:8003"
+    environment:
+      - RPC_URL=http://anvil:8545
+      - PROVIDER_PRIVATE_KEY=${PROVIDER_PRIVATE_KEY}
+    volumes:
+      - ./contracts/deployments:/app/contracts/deployments:ro
+      - ./provider/inventory.txt:/app/provider/inventory.txt
+
+  consumer-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.consumer
+    depends_on:
+      provider-agent:
+        condition: service_started
+      ollama-pull:
+        condition: service_completed_successfully
+    ports:
+      - "8001:8001"
+    environment:
+      - RPC_URL=http://anvil:8545
+      - CONSUMER_PRIVATE_KEY=${CONSUMER_PRIVATE_KEY}
+      - PROVIDER_BASE_URL=http://provider-agent:8002
+      - GATEWAY_BASE_URL=http://provider-agent:8003
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-ministral:3b}
+      - OLLAMA_HOST=http://ollama:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./contracts/deployments:/app/contracts/deployments:ro
+
+  consumer-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.consumer
+    depends_on:
+      consumer-agent:
+        condition: service_started
+    ports:
+      - "8501:8501"
+    environment:
+      - CONSUMER_BASE_URL=http://consumer-agent:8001
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-ministral:3b}
+    entrypoint: ["streamlit", "run", "consumer/ui.py",
+                 "--server.port", "8501", "--server.address", "0.0.0.0"]
+
+volumes:
+  ollama:

@@ -1,0 +1,38 @@
+ARG PYTHON_VERSION=3.13
+ARG UV_VERSION=0.8.22
+
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+
+FROM python:${PYTHON_VERSION}-slim AS builder
+WORKDIR /app
+
+ENV UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=0
+
+COPY --from=uv /uv /uvx /bin/
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+
+FROM python:${PYTHON_VERSION}-slim
+WORKDIR /app
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    UV_PYTHON_DOWNLOADS=0
+
+COPY --from=builder /app/.venv /app/.venv
+
+COPY provider/ ./provider/
+COPY shared/ ./shared/
+
+# deployments volume mounted at runtime — directory must exist
+RUN mkdir -p contracts/deployments
+
+CMD ["sh", "-c", \
+  "uvicorn provider.app:app --host 0.0.0.0 --port 8002 & \
+   uvicorn provider.gateway:app --host 0.0.0.0 --port 8003 & \
+   wait"]

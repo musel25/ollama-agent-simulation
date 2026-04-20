@@ -1,0 +1,3 @@
+{"tier": "small", "mbps": 50, "durationSeconds": 600, "totalSlots": 10, "activeLeases": [{"agreementId": 189410275748849195694689616240058248592, "expiresAt": 1776713500.5160189}]}
+{"tier": "medium", "mbps": 100, "durationSeconds": 600, "totalSlots": 8, "activeLeases": []}
+{"tier": "large", "mbps": 500, "durationSeconds": 600, "totalSlots": 5, "activeLeases": []}

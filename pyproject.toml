@@ -2,11 +2,13 @@
 name = "ollama-agent-simulation"
 version = "0.1.0"
 description = "Add your description here"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
+    "eth-account>=0.11.3",
     "fastapi>=0.136.0",
     "httpx>=0.28.1",
     "ollama>=0.6.1",
     "streamlit>=1.56.0",
     "uvicorn[standard]>=0.44.0",
+    "web3>=6.0,<7",
 ]

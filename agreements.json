@@ -1,0 +1,11 @@
+[
+  {
+    "token_id": "a5f3cae2-9c80-4ac7-96eb-31aee168fabe",
+    "tier": "small",
+    "mbps": 50,
+    "duration_min": 10,
+    "price_eth": 0.01,
+    "issued_at": 1776690968.2814956,
+    "expires_at": 1776691568.2814956
+  }
+]

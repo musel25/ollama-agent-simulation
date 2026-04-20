@@ -3,15 +3,11 @@ import httpx
 
 PROVIDER_BASE_URL = "http://localhost:8001"
 
-CONSUMER_SYSTEM_PROMPT = """You are a bandwidth procurement agent. Help the user acquire
-network bandwidth packages from a provider. The provider offers three tiered packages:
-Small (50 Mbps), Medium (100 Mbps), and Large (500 Mbps) — each valid for 10 minutes.
-Use query_provider to check available tiers and their prices.
-Use purchase_from_provider to buy a tier by specifying the exact tier name and its listed price.
+CONSUMER_SYSTEM_PROMPT = """You are a bandwidth procurement agent. Help the user acquire network bandwidth packages from a provider.
 Always show the token returned after a successful purchase."""
 
 inter_agent_log: list[dict] = []
-_active_model: str = "qwen3:4b"
+_active_model: str = "ministral:3b"
 
 
 def query_provider(question: str) -> str:
@@ -46,12 +42,7 @@ def query_provider(question: str) -> str:
 
 
 def purchase_from_provider(tier: str, agreed_price: float) -> str:
-    """Purchase a bandwidth tier from the provider.
-
-    Args:
-        tier: The tier name to purchase — one of: small, medium, large.
-        agreed_price: The price in ETH exactly as listed in the catalog.
-    """
+    """Buy a bandwidth tier (small, medium, large) at its listed price."""
     payload = {"tier": tier, "agreed_price": agreed_price}
     inter_agent_log.append({
         "from": "consumer",
@@ -84,7 +75,7 @@ def purchase_from_provider(tier: str, agreed_price: float) -> str:
     return result
 
 
-def run_consumer(user_message: str, model: str = "qwen3:4b") -> tuple[str, list[dict]]:
+def run_consumer(user_message: str, model: str = "ministral:3b") -> tuple[str, list[dict]]:
     global _active_model
     _active_model = model
 
@@ -95,7 +86,14 @@ def run_consumer(user_message: str, model: str = "qwen3:4b") -> tuple[str, list[
     tools = [query_provider, purchase_from_provider]
 
     while True:
-        response = ollama.chat(model=model, messages=messages, tools=tools)
+        try:
+            response = ollama.chat(model=model, messages=messages, tools=tools)
+        except Exception as e:
+            error_msg = f"Ollama Error: {e}"
+            if "not found" in str(e).lower():
+                error_msg += f"\n\nMake sure to pull the model first: `ollama pull {model}`"
+            return error_msg, list(inter_agent_log)
+
         msg = response.message
 
         if not msg.tool_calls:
