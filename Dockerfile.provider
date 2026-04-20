@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+WORKDIR /app
+
+RUN pip install uv --no-cache-dir
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+
+COPY provider/ ./provider/
+COPY shared/ ./shared/
+
+# deployments volume mounted at runtime — directory must exist
+RUN mkdir -p contracts/deployments
+
+CMD ["sh", "-c", \
+  "uv run uvicorn provider.app:app --host 0.0.0.0 --port 8002 & \
+   uv run uvicorn provider.gateway:app --host 0.0.0.0 --port 8003 & \
+   wait"]
