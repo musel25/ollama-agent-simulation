@@ -2,10 +2,12 @@
 Streamlit thin-client UI — port 8501.
 All logic delegated to consumer/app.py over HTTP.
 """
+import os
+
 import httpx
 import streamlit as st
 
-CONSUMER_BASE_URL = "http://localhost:8001"
+CONSUMER_BASE_URL = os.environ.get("CONSUMER_BASE_URL", "http://localhost:8001")
 MODELS = ["qwen3:4b", "qwen3:1.7b"]
 
 
