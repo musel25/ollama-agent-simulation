@@ -97,26 +97,50 @@ with left_col:
         st.rerun()
 
 with right_col:
-    st.title("📡 Agent-to-Agent Log")
-    st.subheader("Consumer ↔ Provider HTTP calls")
+    st.title("📡 Provider")
+    log_tab, catalog_tab = st.tabs(["Agent-to-Agent Log", "Catalog"])
 
-    if not st.session_state.agent_log:
-        st.info("No agent communication yet.")
-    else:
-        for entry in st.session_state.agent_log:
-            if entry["from"] == "consumer":
-                with st.chat_message("consumer", avatar="🛒"):
-                    st.write(entry["message"])
-            elif entry["from"] == "provider_step":
-                if entry["role"] == "tool_call":
-                    st.code(entry["content"], language="http")
+    with log_tab:
+        st.subheader("Consumer ↔ Provider HTTP calls")
+
+        if not st.session_state.agent_log:
+            st.info("No agent communication yet.")
+        else:
+            for entry in st.session_state.agent_log:
+                if entry["from"] == "consumer":
+                    with st.chat_message("consumer", avatar="🛒"):
+                        st.write(entry["message"])
+                elif entry["from"] == "provider_step":
+                    if entry["role"] == "tool_call":
+                        st.code(entry["content"], language="http")
+                    else:
+                        st.caption(f"↳ {entry['content']}")
                 else:
-                    st.caption(f"↳ {entry['content']}")
-            else:
-                with st.chat_message("provider", avatar="🏪"):
-                    render_content(entry["message"])
+                    with st.chat_message("provider", avatar="🏪"):
+                        render_content(entry["message"])
 
-    if st.button("🗑 Clear Log"):
-        clear_inter_agent_log()
-        st.session_state.agent_log = []
-        st.rerun()
+        if st.button("🗑 Clear Log"):
+            clear_inter_agent_log()
+            st.session_state.agent_log = []
+            st.rerun()
+
+    with catalog_tab:
+        st.subheader("Live Bandwidth Catalog")
+        if st.button("Refresh"):
+            st.rerun()
+        try:
+            with httpx.Client() as client:
+                resp = client.get(f"{PROVIDER_BASE_URL}/catalog")
+                resp.raise_for_status()
+                catalog = resp.json()
+            for tier in catalog:
+                slots = tier["slots"]
+                bar = "█" * slots + "░" * (10 - slots)
+                st.markdown(
+                    f"**{tier['tier'].capitalize()}** — "
+                    f"{tier['mbps']} Mbps / {tier['duration_min']} min / "
+                    f"`{tier['price_eth']} ETH`"
+                )
+                st.caption(f"Slots: [{bar}] {slots} remaining")
+        except Exception as e:
+            st.error(f"Could not reach provider: {e}")
