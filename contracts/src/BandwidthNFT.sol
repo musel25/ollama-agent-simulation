@@ -50,7 +50,7 @@ contract BandwidthNFT is ERC721, Ownable {
 
     /// @notice Returns the on-chain metadata for a given token.
     function getTokenMetadata(uint256 tokenId) external view returns (TokenMetadata memory) {
-        if (ownerOf(tokenId) == address(0)) revert TokenDoesNotExist(tokenId);
+        if (_ownerOf(tokenId) == address(0)) revert TokenDoesNotExist(tokenId);
         return _metadata[tokenId];
     }
 }
