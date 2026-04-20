@@ -6,3 +6,4 @@ solc = "0.8.20"
 remappings = [
     "@openzeppelin/=lib/openzeppelin-contracts/"
 ]
+fs_permissions = [{ access = "read-write", path = "./deployments" }]

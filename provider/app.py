@@ -175,7 +175,7 @@ async def _event_listener() -> None:
             if current <= last_block:
                 continue
             events = escrow.events.AgreementRequested.get_logs(
-                from_block=last_block + 1, to_block=current
+                fromBlock=last_block + 1, toBlock=current
             )
             last_block = current
             for evt in events:
