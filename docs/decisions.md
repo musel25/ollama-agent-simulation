@@ -100,6 +100,20 @@ This document records every non-obvious decision made during the smart-contract 
 
 ---
 
+---
+
+## Bugs Found During Local E2E Test (Task 10)
+
+### D-21 — `foundry.toml` requires explicit `fs_permissions` for `vm.writeFile`
+**Decision:** Added `fs_permissions = [{ access = "read-write", path = "./deployments" }]` to `contracts/foundry.toml`.  
+**Why:** Foundry's cheatcode sandbox blocks file writes by default. Without this permission, `vm.writeFile("deployments/local.json", ...)` in `Deploy.s.sol` silently fails — the deploy runs without error but `local.json` stays empty. The Python services then crash with "invalid address" when loading the zero-string. This must be set for the deploy script to function.
+
+### D-22 — `web3.py` `get_logs()` uses camelCase keyword arguments
+**Decision:** Changed `from_block=` / `to_block=` to `fromBlock=` / `toBlock=` in `provider/app.py`'s event listener.  
+**Why:** web3.py v6's `ContractEvent.get_logs()` accepts camelCase filter arguments matching the JSON-RPC spec (`fromBlock`, `toBlock`), not Python-style snake_case. Using `from_block=` raises `TypeError: get_logs() got an unexpected keyword argument 'from_block'`, crashing the event listener on every 2-second poll. This would mean the provider never responds to `AgreementRequested` events, breaking the entire settlement flow.
+
+---
+
 ## What Was Preserved from the Original Code
 
 - Ollama integration and `qwen3:4b` as default model (unchanged)
