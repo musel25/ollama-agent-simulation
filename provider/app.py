@@ -146,7 +146,8 @@ def _send_tx(func, value: int = 0) -> str:
         "value": value,
     })
     signed = w3.eth.account.sign_transaction(tx, PROVIDER_PRIVATE_KEY)
-    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+    raw_tx = getattr(signed, "raw_transaction", None) or signed.rawTransaction
+    tx_hash = w3.eth.send_raw_transaction(raw_tx)
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
     if receipt["status"] != 1:
         raise RuntimeError(f"Transaction reverted: {tx_hash.hex()}")

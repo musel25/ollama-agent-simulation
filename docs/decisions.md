@@ -116,7 +116,7 @@ This document records every non-obvious decision made during the smart-contract 
 
 ## What Was Preserved from the Original Code
 
-- Ollama integration and `qwen3:4b` as default model (unchanged)
+- Ollama integration and `ministral:3b` as default model
 - Three bandwidth tiers: Small (50 Mbps), Medium (100 Mbps), Large (500 Mbps), each 600s
 - The `<think>` block rendering in Streamlit (`render_content`)
 - The dual-column Streamlit layout (consumer chat left, provider log right)

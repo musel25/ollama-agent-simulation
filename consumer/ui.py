@@ -6,33 +6,42 @@ import os
 
 import httpx
 import streamlit as st
+from web3 import Web3
 
 CONSUMER_BASE_URL = os.environ.get("CONSUMER_BASE_URL", "http://localhost:8001")
-MODELS = ["qwen3:4b", "qwen3:1.7b"]
+DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "ministral:3b")
+MODELS = list(dict.fromkeys([DEFAULT_MODEL, "ministral:3b", "qwen3:1.7b", "qwen3:4b"]))
 
 
-def render_content(content: str) -> None:
-    if "<think>" in content and "</think>" in content:
-        think = content.split("</think>")[0].replace("<think>", "").strip()
-        answer = content.split("</think>", 1)[1].strip()
-        with st.expander("🧠 Thinking..."):
-            st.write(think)
-        if answer:
-            st.write(answer)
-    else:
+def render_content(content: str, thinking: list[str] | None = None, log: list[dict] | None = None) -> None:
+    thoughts = list(thinking or [])
+    if content:
         st.write(content)
+
+    if thoughts:
+        with st.expander("Thinking", expanded=False):
+            for item in thoughts:
+                st.write(item)
+
+    if log:
+        provider_entries = [entry for entry in log if entry.get("from") == "provider"]
+        if provider_entries:
+            with st.expander("Provider output", expanded=True):
+                for entry in provider_entries:
+                    st.write(entry["message"])
 
 
 st.set_page_config(page_title="Bandwidth Agent Simulation", layout="wide")
 
-if "chat_history" not in st.session_state:
+UI_STATE_VERSION = 2
+if st.session_state.get("ui_state_version") != UI_STATE_VERSION:
+    st.session_state.ui_state_version = UI_STATE_VERSION
     st.session_state.chat_history = []
-if "agent_log" not in st.session_state:
     st.session_state.agent_log = []
 
 with st.sidebar:
     st.header("⚙️ Settings")
-    selected_model = st.selectbox("Ollama model", MODELS, index=0)
+    selected_model = st.selectbox("Ollama model", MODELS, index=MODELS.index(DEFAULT_MODEL))
     st.caption(f"Pull with: `ollama pull {selected_model}`")
 
     st.divider()
@@ -63,7 +72,7 @@ with left_col:
     st.title("🛒 Consumer Agent")
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
-            render_content(msg["content"])
+            render_content(msg["content"], msg.get("thinking"), msg.get("log"))
 
     user_input = st.chat_input("Ask the consumer agent...")
     if user_input:
@@ -79,10 +88,17 @@ with left_col:
                 data = resp.json()
                 response_text = data["response"]
                 log_snapshot = data["log"]
+                thinking_snapshot = data.get("thinking", [])
             except Exception as e:
                 response_text = f"Error reaching consumer agent: {e}"
                 log_snapshot = []
-        st.session_state.chat_history.append({"role": "assistant", "content": response_text})
+                thinking_snapshot = []
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": response_text,
+            "thinking": thinking_snapshot,
+            "log": log_snapshot,
+        })
         st.session_state.agent_log = log_snapshot
         st.rerun()
 
@@ -121,7 +137,6 @@ with right_col:
                 resp.raise_for_status()
             catalog = resp.json()
             for pkg in catalog:
-                from web3 import Web3
                 price_eth = float(Web3.from_wei(pkg["priceWei"], "ether"))
                 available = pkg.get("availableSlots", "?")
                 bar_filled = min(available, 10) if isinstance(available, int) else 0
