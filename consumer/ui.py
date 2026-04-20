@@ -9,8 +9,8 @@ import streamlit as st
 from web3 import Web3
 
 CONSUMER_BASE_URL = os.environ.get("CONSUMER_BASE_URL", "http://localhost:8001")
-DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "ministral:3b")
-MODELS = list(dict.fromkeys([DEFAULT_MODEL, "ministral:3b", "qwen3:1.7b", "qwen3:4b"]))
+DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
+MODELS = list(dict.fromkeys([DEFAULT_MODEL, "qwen3:4b", "qwen3:1.7b"]))
 
 
 def render_content(content: str, thinking: list[str] | None = None, log: list[dict] | None = None) -> None:

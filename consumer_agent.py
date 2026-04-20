@@ -7,7 +7,7 @@ CONSUMER_SYSTEM_PROMPT = """You are a bandwidth procurement agent. Help the user
 Always show the token returned after a successful purchase."""
 
 inter_agent_log: list[dict] = []
-_active_model: str = "ministral:3b"
+_active_model: str = "qwen3:4b"
 
 
 def query_provider(question: str) -> str:
@@ -75,7 +75,7 @@ def purchase_from_provider(tier: str, agreed_price: float) -> str:
     return result
 
 
-def run_consumer(user_message: str, model: str = "ministral:3b") -> tuple[str, list[dict]]:
+def run_consumer(user_message: str, model: str = "qwen3:4b") -> tuple[str, list[dict]]:
     global _active_model
     _active_model = model
 

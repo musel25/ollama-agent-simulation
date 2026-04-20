@@ -28,7 +28,7 @@ CONSUMER_ADDRESS = consumer_account.address
 
 PROVIDER_BASE_URL = os.environ.get("PROVIDER_BASE_URL", "http://localhost:8002")
 GATEWAY_BASE_URL = os.environ.get("GATEWAY_BASE_URL", "http://localhost:8003")
-DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "ministral:3b")
+DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
 
 inter_agent_log: list[dict] = []
 _logged_interactions: set[tuple[str, str]] = set()
@@ -52,6 +52,12 @@ def _extract_thinking(content: str) -> tuple[str, list[str]]:
         thought, remainder = rest.split("</think>", 1)
         if before.strip():
             visible_parts.append(before.strip())
+        if thought.strip():
+            thoughts.append(thought.strip())
+
+    # Handle truncated thinking: content before a bare </think> with no opening tag
+    if "</think>" in remainder:
+        thought, remainder = remainder.split("</think>", 1)
         if thought.strip():
             thoughts.append(thought.strip())
 
@@ -153,19 +159,23 @@ def request_agreement_on_chain(package_id: str) -> str:
     )
 
 
-def check_agreement_status(agreement_id: int) -> str:
+def check_agreement_status(agreement_id: str) -> str:
     """
     Check the on-chain status of an agreement. If ACTIVE, call the gateway to confirm service.
 
     Args:
-        agreement_id: The agreementId returned by request_agreement_on_chain.
+        agreement_id: The agreementId returned by request_agreement_on_chain (as a string to preserve uint256 precision).
 
     Returns:
         Status string. If ACTIVE, includes bandwidth and seconds remaining.
     """
+    try:
+        aid = int(agreement_id)
+    except (ValueError, TypeError):
+        return f"ERROR: agreement_id must be a number, got: {agreement_id!r}"
     escrow = get_escrow_contract(w3)
     try:
-        agreement = escrow.functions.getAgreement(agreement_id).call()
+        agreement = escrow.functions.getAgreement(aid).call()
     except Exception as e:
         return f"ERROR reading agreement {agreement_id}: {e}"
 
@@ -235,7 +245,7 @@ def run_consumer(user_message: str, model: str = DEFAULT_MODEL) -> tuple[str, li
 
     for _ in range(8):
         try:
-            response = ollama.chat(model=model, messages=messages, tools=tools)
+            response = ollama.chat(model=model, messages=messages, tools=tools, think=False)
         except Exception as e:
             error_msg = f"Ollama Error: {e}"
             if "not found" in str(e).lower():

@@ -6,6 +6,9 @@ up:
 	@echo "Services starting... UI at http://localhost:8501"
 
 down:
+	docker compose down
+
+down-clean:
 	docker compose down -v
 
 logs:
@@ -25,7 +28,7 @@ demo: _check_services
 	@echo "=== STEP 2: Consumer negotiation (LLM + chain, ~30-60s) ==="
 	@curl -sf -X POST http://localhost:8001/chat \
 		-H "Content-Type: application/json" \
-		-d '{"message":"I need 100 Mbps for 10 minutes","model":"$(or $(OLLAMA_MODEL),ministral:3b)"}' \
+		-d '{"message":"I need 100 Mbps for 10 minutes","model":"$(or $(OLLAMA_MODEL),qwen3:4b)"}' \
 		| python3 -m json.tool
 	@echo ""
 	@echo "=== STEP 3: Provider inventory after purchase ==="

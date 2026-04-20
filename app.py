@@ -47,7 +47,7 @@ if "chat_history" not in st.session_state:
 if "agent_log" not in st.session_state:
     st.session_state.agent_log = []
 
-MODELS = ["ministral:3b", "qwen3:4b", "qwen3:1.7b"]
+MODELS = ["qwen3:4b"]
 
 with st.sidebar:
     st.header("⚙️ Settings")

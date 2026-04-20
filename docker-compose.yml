@@ -42,7 +42,7 @@ services:
       timeout: 10s
       retries: 30
 
-  ollama-pull:
+  ollama-pull-4b:
     image: ollama/ollama:latest
     depends_on:
       ollama:
@@ -51,10 +51,19 @@ services:
       - OLLAMA_HOST=http://ollama:11434
     volumes:
       - ollama:/root/.ollama
-    entrypoint:
-      - ollama
-      - pull
-      - ${OLLAMA_MODEL:-ministral:3b}
+    entrypoint: ["ollama", "pull", "qwen3:4b"]
+    restart: "no"
+
+  ollama-pull-1.7b:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    volumes:
+      - ollama:/root/.ollama
+    entrypoint: ["ollama", "pull", "qwen3:1.7b"]
     restart: "no"
 
   provider-agent:
@@ -81,7 +90,9 @@ services:
     depends_on:
       provider-agent:
         condition: service_started
-      ollama-pull:
+      ollama-pull-4b:
+        condition: service_completed_successfully
+      ollama-pull-1.7b:
         condition: service_completed_successfully
     ports:
       - "8001:8001"
@@ -90,7 +101,7 @@ services:
       - CONSUMER_PRIVATE_KEY=${CONSUMER_PRIVATE_KEY}
       - PROVIDER_BASE_URL=http://provider-agent:8002
       - GATEWAY_BASE_URL=http://provider-agent:8003
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-ministral:3b}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:4b}
       - OLLAMA_HOST=http://ollama:11434
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -108,7 +119,7 @@ services:
       - "8501:8501"
     environment:
       - CONSUMER_BASE_URL=http://consumer-agent:8001
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-ministral:3b}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:4b}
     entrypoint: ["streamlit", "run", "consumer/ui.py",
                  "--server.port", "8501", "--server.address", "0.0.0.0"]
 
