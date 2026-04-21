@@ -242,6 +242,13 @@ def render_catalog(active_tier: str | None = None) -> None:
 
 st.set_page_config(page_title="Bandwidth Agent Simulation", layout="wide")
 
+st.markdown("""
+<style>
+section[data-testid="stSidebar"] { width: 220px !important; min-width: 220px !important; }
+.block-container { padding-top: 1rem !important; padding-bottom: 1rem !important; }
+</style>
+""", unsafe_allow_html=True)
+
 UI_STATE_VERSION = 3
 if st.session_state.get("ui_state_version") != UI_STATE_VERSION:
     st.session_state.ui_state_version = UI_STATE_VERSION
@@ -278,7 +285,7 @@ with st.sidebar:
 # Stepper bar (full width above columns)
 render_stepper(st.session_state.timeline)
 
-left_col, right_col = st.columns([38, 62])
+left_col, right_col = st.columns([28, 72])
 
 # ── Left: Human chat ───────────────────────────────────────────────────────────
 with left_col:
