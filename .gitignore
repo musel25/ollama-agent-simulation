@@ -4,3 +4,4 @@ __pycache__/
 contracts/out/
 contracts/cache/
 contracts/lib/
+.superpowers/
