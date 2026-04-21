@@ -101,6 +101,7 @@ services:
       - CONSUMER_PRIVATE_KEY=${CONSUMER_PRIVATE_KEY}
       - PROVIDER_BASE_URL=http://provider-agent:8002
       - GATEWAY_BASE_URL=http://provider-agent:8003
+      - PROVIDER_MCP_URL=http://provider-agent:8002/mcp
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:4b}
       - OLLAMA_HOST=http://ollama:11434
     extra_hosts:
