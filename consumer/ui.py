@@ -277,14 +277,18 @@ with st.sidebar:
 
 # Stepper bar (full width above columns)
 render_stepper(st.session_state.timeline)
-st.divider()
 
 left_col, right_col = st.columns([38, 62])
 
 # ── Left: Human chat ───────────────────────────────────────────────────────────
 with left_col:
-    st.title("🧑 Human")
-    st.caption("Human picks the package — agents execute the rest autonomously.")
+    st.markdown(
+        '<div style="font-size:15px;font-weight:700;color:#e0e0e0;'
+        'margin-bottom:2px;padding:4px 0;">👤 Human</div>'
+        '<div style="font-size:11px;color:#666;margin-bottom:12px;">'
+        'Human picks the package — agents execute the rest autonomously.</div>',
+        unsafe_allow_html=True,
+    )
 
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
@@ -330,7 +334,11 @@ with left_col:
 
 # ── Right: A2A transcript ──────────────────────────────────────────────────────
 with right_col:
-    st.title("🤖↔🤖 Agent-to-Agent Transcript")
+    st.markdown(
+        '<div style="font-size:15px;font-weight:700;color:#e0e0e0;'
+        'margin-bottom:12px;padding:4px 0;">&#x1F916; Agent &#x2194; Agent Transcript</div>',
+        unsafe_allow_html=True,
+    )
 
     timeline = st.session_state.timeline
     active_tier = _active_tier_from_timeline(timeline)
