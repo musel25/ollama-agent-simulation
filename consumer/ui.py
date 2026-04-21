@@ -245,7 +245,7 @@ st.set_page_config(page_title="Bandwidth Agent Simulation", layout="wide")
 st.markdown("""
 <style>
 section[data-testid="stSidebar"] { width: 220px !important; min-width: 220px !important; }
-.block-container { padding-top: 1rem !important; padding-bottom: 1rem !important; }
+.block-container { padding-top: 3.5rem !important; padding-bottom: 1rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -290,7 +290,7 @@ left_col, right_col = st.columns([28, 72])
 # ── Left: Human chat ───────────────────────────────────────────────────────────
 with left_col:
     st.markdown(
-        '<div style="font-size:15px;font-weight:700;color:#e0e0e0;'
+        '<div style="font-size:19px;font-weight:700;color:#e0e0e0;'
         'margin-bottom:2px;padding:4px 0;">👤 Human</div>'
         '<div style="font-size:11px;color:#666;margin-bottom:12px;">'
         'Human picks the package — agents execute the rest autonomously.</div>',
@@ -342,7 +342,7 @@ with left_col:
 # ── Right: A2A transcript ──────────────────────────────────────────────────────
 with right_col:
     st.markdown(
-        '<div style="font-size:15px;font-weight:700;color:#e0e0e0;'
+        '<div style="font-size:19px;font-weight:700;color:#e0e0e0;'
         'margin-bottom:12px;padding:4px 0;">&#x1F916; Agent &#x2194; Agent Transcript</div>',
         unsafe_allow_html=True,
     )

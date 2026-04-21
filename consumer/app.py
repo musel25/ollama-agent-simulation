@@ -217,18 +217,29 @@ STATUS_NAMES = {0: "NONE", 1: "REQUESTED", 2: "ACTIVE", 3: "CLOSED", 4: "CANCELL
 
 # ── LLM loop ───────────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are a bandwidth procurement agent for a blockchain-based network service.
+Your goal is to get the user an ACTIVE service token — complete the full purchase workflow whenever you can determine the right tier.
 
 Tools available:
 1. query_provider_catalog — fetch available packages and prices
 2. request_agreement_on_chain — get a quote and lock ETH on-chain
 3. check_agreement_status — verify settlement and get the active token
 
+Workflow — run every step when you can determine the tier:
+1. Call query_provider_catalog to fetch the catalog (skip only if the user names an exact tier: small, medium, or large).
+2. Pick the package whose bandwidth best matches the request. Use the smallest tier that satisfies the requirement.
+3. Call request_agreement_on_chain with the chosen package_id.
+4. Call check_agreement_status immediately after. If REQUESTED (not yet settled), retry up to 5 times before giving up.
+5. Reply with a summary: what was purchased, agreementId, tokenId, and bandwidth granted.
+
+Clarification — ask ONE short question only when intent is genuinely ambiguous:
+- Ambiguous: "give me something", "a package please", no bandwidth or tier specified at all.
+- NOT ambiguous: any Mbps value, tier name (small/medium/large), "fastest", "cheapest", "at least X Mbps".
+- If ambiguous, ask exactly: "Which tier? small (50 Mbps / 0.01 ETH), medium (100 Mbps / 0.02 ETH), or large (500 Mbps / 0.08 ETH)?"
+- When the user's next message names a tier or bandwidth, immediately run the full workflow — do not ask again.
+
 Rules:
-- If the user names a specific tier (small, medium, or large), call request_agreement_on_chain IMMEDIATELY — do NOT query the catalog first.
-- Only call query_provider_catalog when the user is browsing, undecided, or explicitly asks for options.
-- After calling request_agreement_on_chain, ALWAYS call check_agreement_status in the same turn without waiting for the user.
-- If check_agreement_status returns REQUESTED (not yet settled), tell the user to check again in a few seconds.
-- CRITICAL: Only report the EXACT agreementId and tokenId returned by the tools. NEVER guess or use example numbers like "4567890"."""
+- Default to proceeding autonomously. Only ask when you genuinely cannot determine the tier.
+- CRITICAL: Only report the EXACT agreementId and tokenId returned by the tools. NEVER guess or use example numbers."""
 
 TOOL_MAP = {
     "query_provider_catalog": query_provider_catalog,
@@ -247,7 +258,7 @@ def run_consumer(user_message: str, model: str = DEFAULT_MODEL) -> tuple[str, li
     ]
     tools = [query_provider_catalog, request_agreement_on_chain, check_agreement_status]
 
-    for _ in range(8):
+    for _ in range(12):
         try:
             response = ollama.chat(model=model, messages=messages, tools=tools, think=False)
         except Exception as e:
@@ -285,8 +296,8 @@ def run_consumer(user_message: str, model: str = DEFAULT_MODEL) -> tuple[str, li
             messages.append({"role": "tool", "tool_name": tool_name, "content": str(result)})
     else:
         return (
-            "I stopped after several tool calls to avoid repeating the same action. "
-            "Check the provider transcript for the latest result.",
+            "The agreement was submitted on-chain but the provider has not settled it yet after several retries. "
+            "The NFT will be delivered automatically once the provider processes the event — check back shortly.",
             list(inter_agent_log),
             thinking,
         )
