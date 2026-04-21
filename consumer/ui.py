@@ -41,8 +41,10 @@ def _parse_log_to_phases(log: list[dict], turn: int) -> list[dict]:
     phases: list[dict] = []
 
     for entry in log:
-        sender = entry["from"]
-        msg = entry["message"]
+        sender = entry.get("from", "")
+        msg = entry.get("message", "")
+        if not sender or not msg:
+            continue
 
         if sender == "consumer" and msg.startswith("GET /catalog"):
             phases.append({
@@ -99,7 +101,7 @@ def _merge_timeline(existing: list[dict], new_phases: list[dict]) -> list[dict]:
 
 
 def _current_step(timeline: list[dict]) -> str:
-    """Return the first step not yet completed (the active/next step)."""
+    """Return the first step not yet completed, or the last step if all are done."""
     completed = {p["step"] for p in timeline if p["status"] == "done"}
     for step in STEP_ORDER:
         if step not in completed:
