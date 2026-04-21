@@ -110,15 +110,16 @@ def _current_step(timeline: list[dict]) -> str:
 
 
 def _active_tier_from_timeline(timeline: list[dict]) -> str | None:
-    """Extract the purchased tier name from the quote phase consumer message."""
+    """Extract the most recently purchased tier name from the quote phase consumer messages."""
+    result = None
     for phase in timeline:
         if phase["step"] == "quote":
             for msg in phase["messages"]:
                 if msg["from"] == "consumer":
                     m = re.search(r"package_id=(\w+)", msg["text"])
                     if m:
-                        return m.group(1)
-    return None
+                        result = m.group(1)
+    return result
 
 
 def render_stepper(timeline: list[dict]) -> None:
@@ -208,6 +209,9 @@ def render_catalog(active_tier: str | None = None) -> None:
         st.error(f"Could not load catalog: {e}")
         return
 
+    if not catalog:
+        st.info("No packages available.")
+        return
     cols = st.columns(len(catalog))
     for col, pkg in zip(cols, catalog):
         price_eth = float(Web3.from_wei(pkg["priceWei"], "ether"))
@@ -335,11 +339,12 @@ with right_col:
     if not timeline:
         st.info("No agent communication yet. Ask the consumer agent something.")
     else:
+        # Render all accumulated phases in order (cumulative across turns)
+        for phase in timeline:
+            render_phase(phase)
+        # Show pending placeholders for steps not yet started
         for step in STEP_ORDER:
-            phase = next((p for p in timeline if p["step"] == step), None)
-            if phase:
-                render_phase(phase)
-            elif step not in completed_steps:
+            if step not in completed_steps:
                 color, bg, icon = PHASE_COLORS["pending"]
                 label = STEP_LABELS[step]
                 st.markdown(
