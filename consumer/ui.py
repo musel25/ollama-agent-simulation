@@ -153,7 +153,7 @@ def render_stepper(timeline: list[dict]) -> None:
 
 def render_phase(phase: dict) -> None:
     status = phase["status"]
-    color, bg, icon = PHASE_COLORS[status]
+    color, bg, icon = PHASE_COLORS.get(status, PHASE_COLORS["pending"])
     label = STEP_LABELS[phase["step"]]
     summary = phase.get("summary", "")
     turn = phase.get("turn", "")
@@ -226,9 +226,9 @@ def render_catalog(active_tier: str | None = None) -> None:
             st.markdown(
                 f'<div style="border:1px solid {border};border-radius:8px;'
                 f'padding:8px 10px;background:{bg};">'
-                f'<div style="font-size:12px;font-weight:600;color:#ddd;">{tier}{tick}</div>'
+                f'<div style="font-size:12px;font-weight:600;color:#ddd;">{html_lib.escape(str(tier))}{tick}</div>'
                 f'<div style="font-size:10px;color:#666;margin:3px 0;">'
-                f'{pkg["mbps"]} Mbps · {pkg["durationSeconds"]}s · {price_eth} ETH</div>'
+                f'{html_lib.escape(str(pkg["mbps"]))} Mbps · {html_lib.escape(str(pkg["durationSeconds"]))}s · {price_eth} ETH</div>'
                 f'<div style="height:3px;background:#2a2a3e;border-radius:2px;overflow:hidden;">'
                 f'<div style="width:{bar_w}%;height:100%;background:#22c55e;'
                 f'border-radius:2px;"></div></div>'
