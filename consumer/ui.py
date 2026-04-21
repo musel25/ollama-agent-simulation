@@ -2,7 +2,9 @@
 Streamlit thin-client UI — port 8501.
 All logic delegated to consumer/app.py over HTTP.
 """
+import html as html_lib
 import os
+import re
 
 import httpx
 import streamlit as st
@@ -11,6 +13,110 @@ from web3 import Web3
 CONSUMER_BASE_URL = os.environ.get("CONSUMER_BASE_URL", "http://localhost:8001")
 DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
 MODELS = list(dict.fromkeys([DEFAULT_MODEL, "qwen3:4b", "qwen3:1.7b"]))
+
+STEP_ORDER = ["catalog", "quote", "onchain", "gateway"]
+STEP_LABELS = {
+    "catalog": "Catalog",
+    "quote":   "Quote",
+    "onchain": "On-chain TX",
+    "gateway": "Gateway",
+}
+BUBBLE_STYLES = {
+    # sender -> (label, bg, border, accent)
+    "consumer": ("🛒 consumer agent", "#1a1a2e", "#2a2a4e", "#818cf8"),
+    "provider": ("🏪 provider agent", "#1a2535", "#2a3545", "#60a5fa"),
+    "chain":    ("⛓ blockchain",      "#1f1a0a", "#3a2a0a", "#f59e0b"),
+    "gateway":  ("🌐 gateway",         "#1a2a1a", "#2a3a2a", "#34d399"),
+}
+PHASE_COLORS = {
+    # status -> (border_color, bg_color, icon)
+    "done":    ("#22c55e", "#14291a", "✓"),
+    "active":  ("#3b82f6", "#1a2f4a", "●"),
+    "pending": ("#555555", "#1a1a2a", "○"),
+}
+
+
+def _parse_log_to_phases(log: list[dict], turn: int) -> list[dict]:
+    """Convert a flat inter-agent log into typed phase dicts."""
+    phases: list[dict] = []
+
+    for entry in log:
+        sender = entry["from"]
+        msg = entry["message"]
+
+        if sender == "consumer" and msg.startswith("GET /catalog"):
+            phases.append({
+                "step": "catalog", "status": "done", "turn": turn,
+                "summary": "", "messages": [{"from": "consumer", "text": msg}],
+            })
+
+        elif sender == "provider" and "Mbps" in msg and phases and phases[-1]["step"] == "catalog":
+            phases[-1]["messages"].append({"from": "provider", "text": msg})
+            count = len([ln for ln in msg.split("\n") if ln.strip()])
+            phases[-1]["summary"] = f"{count} tiers available"
+
+        elif sender == "consumer" and "POST /quote" in msg:
+            phases.append({
+                "step": "quote", "status": "done", "turn": turn,
+                "summary": "", "messages": [{"from": "consumer", "text": msg}],
+            })
+
+        elif sender == "provider" and "Quote received:" in msg:
+            if phases and phases[-1]["step"] == "quote":
+                phases[-1]["messages"].append({"from": "provider", "text": msg})
+                m = re.search(r"price=([\d.]+ ETH)", msg)
+                phases[-1]["summary"] = m.group(1) if m else "quoted"
+
+        elif sender == "consumer" and "requestAgreement() sent." in msg:
+            phases.append({
+                "step": "onchain", "status": "done", "turn": turn,
+                "summary": "ETH locked", "messages": [{"from": "chain", "text": msg}],
+            })
+
+        elif sender == "consumer" and "Agreement ACTIVE." in msg:
+            if phases and phases[-1]["step"] == "onchain":
+                phases[-1]["messages"].append({"from": "chain", "text": msg})
+
+        elif sender == "provider" and "Gateway response:" in msg:
+            phases.append({
+                "step": "gateway", "status": "done", "turn": turn,
+                "summary": "service active", "messages": [{"from": "gateway", "text": msg}],
+            })
+
+    return phases
+
+
+def _merge_timeline(existing: list[dict], new_phases: list[dict]) -> list[dict]:
+    """Append new phases, skipping any (step, turn) pair already present."""
+    existing_keys = {(p["step"], p["turn"]) for p in existing}
+    result = list(existing)
+    for phase in new_phases:
+        key = (phase["step"], phase["turn"])
+        if key not in existing_keys:
+            result.append(phase)
+            existing_keys.add(key)
+    return result
+
+
+def _current_step(timeline: list[dict]) -> str:
+    """Return the first step not yet completed (the active/next step)."""
+    completed = {p["step"] for p in timeline if p["status"] == "done"}
+    for step in STEP_ORDER:
+        if step not in completed:
+            return step
+    return STEP_ORDER[-1]
+
+
+def _active_tier_from_timeline(timeline: list[dict]) -> str | None:
+    """Extract the purchased tier name from the quote phase consumer message."""
+    for phase in timeline:
+        if phase["step"] == "quote":
+            for msg in phase["messages"]:
+                if msg["from"] == "consumer":
+                    m = re.search(r"package_id=(\w+)", msg["text"])
+                    if m:
+                        return m.group(1)
+    return None
 
 
 def render_content(content: str, thinking: list[str] | None = None, log: list[dict] | None = None) -> None:
