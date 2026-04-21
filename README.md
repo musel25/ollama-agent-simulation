@@ -2,7 +2,9 @@
 
 > Two AI agents negotiate and pay for internet bandwidth — entirely on-chain, running on your laptop.
 
-This is a proof-of-concept where a **Consumer AI** and a **Provider AI** talk to each other over HTTP, agree on a bandwidth package, and settle the payment using a real Ethereum smart contract (running locally). No real money, no real internet traffic — just a working demonstration of what autonomous AI-to-AI commerce could look like.
+This is a proof-of-concept where a **Consumer AI** and a **Provider AI** interact using the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), agree on a bandwidth package, and settle the payment using a real Ethereum smart contract (running locally). No real money, no real internet traffic — just a working demonstration of what autonomous AI-to-AI commerce could look like.
+
+**Key protocols:** The Provider exposes an MCP server at `/mcp` so any MCP-compatible agent (Claude, GPT-4, Ollama) can discover and call its tools without custom integration. Both agents advertise their capabilities via an A2A Agent Card at `/.well-known/agent.json`.
 
 ---
 
@@ -29,23 +31,24 @@ Consumer UI  (:8501)        ← Streamlit web app
    │  POST /chat
    ▼
 Consumer Agent  (:8001)     ← FastAPI + Ollama LLM
+   │  discovers provider via /.well-known/agent.json  (A2A Agent Card)
    │
-   ├─ GET /catalog  ──────────────────────────► Provider Agent  (:8002)
-   │                                              returns available packages + prices
+   ├─ MCP tools/list  ─────────────────────────► Provider Agent  (:8002/mcp)
+   │   get_catalog()  ◄─────── MCP ────────────┘  FastMCP server
    │
-   ├─ POST /quote  ──────────────────────────► Provider Agent  (:8002)
-   │    agreementId ◄────────────────────────┘
+   ├─ MCP tools/call  ─────────────────────────► Provider Agent  (:8002/mcp)
+   │   request_quote(package_id) ◄── MCP ───────┘  returns agreementId
    │
-   ├─ requestAgreement()  ───────────────────► BandwidthEscrow  (Anvil :8545)
-   │    Consumer locks ETH on-chain             Smart contract holds funds
-   │                                            Provider sees AgreementRequested event
-   │                                            Provider mints NFT → BandwidthNFT
-   │                                            Provider calls deposit()
-   │                                            Atomic swap: ETH → Provider, NFT → Consumer
+   ├─ requestAgreement()  ─────────────────────► BandwidthEscrow  (Anvil :8545)
+   │    Consumer locks ETH on-chain               Smart contract holds funds
+   │                                              Provider sees AgreementRequested event
+   │                                              Provider mints NFT → BandwidthNFT
+   │                                              Provider calls deposit()
+   │                                              Atomic swap: ETH → Provider, NFT → Consumer
    │
-   └─ GET /service  ─────────────────────────► Gateway  (:8003)
-        (signed nonce + tokenId)               checks ownerOf() on-chain
-        service details ◄────────────────────┘
+   └─ GET /service  ───────────────────────────► Gateway  (:8003)
+        (signed nonce + tokenId)                 checks ownerOf() on-chain
+        service details ◄──────────────────────┘
 ```
 
 ### Services at a glance
@@ -53,9 +56,9 @@ Consumer Agent  (:8001)     ← FastAPI + Ollama LLM
 | Service | Port | What it does |
 |---------|------|-------------|
 | Anvil (local blockchain) | 8545 | Runs a fake Ethereum chain for testing |
-| Provider Agent | 8002 | Sells bandwidth — serves catalog, quotes, and listens for on-chain events |
+| Provider Agent | 8002 | Sells bandwidth — FastMCP server at `/mcp`, A2A Agent Card at `/.well-known/agent.json` |
 | Gateway | 8003 | Verifies NFT ownership before giving access to the service |
-| Consumer Agent | 8001 | Buys bandwidth — the LLM lives here |
+| Consumer Agent | 8001 | Buys bandwidth — LLM uses MCP to call provider tools, A2A Agent Card at `/.well-known/agent.json` |
 | Consumer UI | 8501 | The chat interface you talk to |
 
 ---
@@ -200,7 +203,9 @@ docs/
 ## What this PoC does and doesn't do
 
 **Does:**
-- End-to-end A2A negotiation: consumer LLM interprets natural language, picks a package, and completes payment without human help
+- **MCP tool calling**: Provider exposes a FastMCP server; consumer LLM discovers and calls tools dynamically — any MCP-compatible agent can use it without custom integration
+- **A2A Agent Cards**: Both agents serve `/.well-known/agent.json` advertising capabilities and MCP endpoint (A2A discovery pattern)
+- End-to-end autonomous purchase: consumer LLM interprets natural language, picks a package, and completes payment without human help
 - Double-escrow atomic swap: ETH from consumer and NFT from provider are exchanged in a single `deposit()` transaction — neither party can cheat
 - Fully on-chain NFT entitlement: `bandwidthMbps`, `durationSeconds`, `startTime`, and `endpoint` stored directly in the token (no IPFS)
 - NFT-gated gateway: access is verified by checking `ownerOf()` on-chain using a signed Ethereum nonce (replay-safe)

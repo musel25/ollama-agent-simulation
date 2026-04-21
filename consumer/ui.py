@@ -46,28 +46,42 @@ def _parse_log_to_phases(log: list[dict], turn: int) -> list[dict]:
         if not sender or not msg:
             continue
 
-        if sender == "consumer" and msg.startswith("GET /catalog"):
+        if sender == "consumer" and (msg.startswith("GET /catalog") or "[MCP] get_catalog" in msg):
             phases.append({
                 "step": "catalog", "status": "done", "turn": turn,
                 "summary": "", "messages": [{"from": "consumer", "text": msg}],
             })
 
-        elif sender == "provider" and "Mbps" in msg and phases and phases[-1]["step"] == "catalog":
+        elif sender == "provider" and ("Mbps" in msg or '"mbps"' in msg) and phases and phases[-1]["step"] == "catalog":
             phases[-1]["messages"].append({"from": "provider", "text": msg})
-            count = len([ln for ln in msg.split("\n") if ln.strip()])
+            # JSON catalog: count objects; plain text: count non-empty lines
+            try:
+                import json as _json
+                items = _json.loads(msg)
+                count = len(items) if isinstance(items, list) else len([ln for ln in msg.split("\n") if ln.strip()])
+            except Exception:
+                count = len([ln for ln in msg.split("\n") if ln.strip()])
             phases[-1]["summary"] = f"{count} tiers available"
 
-        elif sender == "consumer" and "POST /quote" in msg:
+        elif sender == "consumer" and ("POST /quote" in msg or "[MCP] request_quote" in msg):
             phases.append({
                 "step": "quote", "status": "done", "turn": turn,
                 "summary": "", "messages": [{"from": "consumer", "text": msg}],
             })
 
-        elif sender == "provider" and "Quote received:" in msg:
+        elif sender == "provider" and ("Quote received:" in msg or '"agreementId"' in msg):
             if phases and phases[-1]["step"] == "quote":
                 phases[-1]["messages"].append({"from": "provider", "text": msg})
-                m = re.search(r"price=([\d.]+ ETH)", msg)
-                phases[-1]["summary"] = m.group(1) if m else "quoted"
+                # Try JSON format first (MCP), then legacy "price=X ETH" format
+                m_wei = re.search(r'"priceWei":\s*(\d+)', msg)
+                m_eth = re.search(r"price=([\d.]+ ETH)", msg)
+                if m_wei:
+                    price_eth = float(Web3.from_wei(int(m_wei.group(1)), "ether"))
+                    phases[-1]["summary"] = f"{price_eth} ETH"
+                elif m_eth:
+                    phases[-1]["summary"] = m_eth.group(1)
+                else:
+                    phases[-1]["summary"] = "quoted"
 
         elif sender == "consumer" and "requestAgreement() sent." in msg:
             phases.append({
@@ -116,7 +130,11 @@ def _active_tier_from_timeline(timeline: list[dict]) -> str | None:
         if phase["step"] == "quote":
             for msg in phase["messages"]:
                 if msg["from"] == "consumer":
+                    # legacy: "POST /quote package_id=small"
                     m = re.search(r"package_id=(\w+)", msg["text"])
+                    if not m:
+                        # MCP: '[MCP] request_quote({"package_id": "small", ...})'
+                        m = re.search(r'"package_id":\s*"(\w+)"', msg["text"])
                     if m:
                         result = m.group(1)
     return result
