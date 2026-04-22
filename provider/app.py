@@ -161,14 +161,17 @@ async def _handle_agreement(nft, escrow, agreement_id: int, args: dict) -> None:
             log.error(f"NFT tokenId={token_id} is orphaned (minted but swap failed). Manual cleanup needed.")
 
 
+_mcp_http_app = mcp.http_app()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    asyncio.create_task(_event_listener())
-    yield
+    async with _mcp_http_app.lifespan(app):
+        asyncio.create_task(_event_listener())
+        yield
 
 
 app = FastAPI(title="Bandwidth Provider", lifespan=lifespan)
-app.mount("/mcp", mcp.http_app())
 
 
 class QuoteRequest(BaseModel):
@@ -202,6 +205,11 @@ def get_inventory() -> list[dict]:
 @app.get("/address")
 def provider_address() -> dict:
     return {"address": PROVIDER_ADDRESS}
+
+
+# MCP mounted last so REST routes above are checked first by Starlette's router.
+# http_app() registers its route at /mcp internally, so the MCP endpoint is at /mcp.
+app.mount("/", _mcp_http_app)
 
 
 if __name__ == "__main__":
