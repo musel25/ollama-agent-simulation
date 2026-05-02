@@ -51,10 +51,14 @@ _provider_agent_card = build_provider_agent_card()
 _AGENT_CARD_JSON = MessageToDict(_provider_agent_card, preserving_proto_field_name=True)
 
 
+_handler_tasks: set[asyncio.Task] = set()
+
+
 async def _event_listener() -> None:
     escrow = get_escrow_contract(w3)
-    log.info("Event listener started, watching AgreementRequested...")
     last_block = w3.eth.block_number
+    log.info("Event listener started, watching AgreementRequested at %s from block %d",
+             escrow.address, last_block)
 
     while True:
         await asyncio.sleep(2)
@@ -65,14 +69,19 @@ async def _event_listener() -> None:
             events = escrow.events.AgreementRequested.get_logs(
                 fromBlock=last_block + 1, toBlock=current
             )
+            if events:
+                log.info("Saw %d AgreementRequested event(s) in blocks %d..%d",
+                         len(events), last_block + 1, current)
             last_block = current
             for evt in events:
                 args = evt["args"]
-                asyncio.create_task(
+                t = asyncio.create_task(
                     _handle_agreement(escrow, args["agreementId"], args)
                 )
+                _handler_tasks.add(t)
+                t.add_done_callback(_handler_tasks.discard)
         except Exception as e:
-            log.error(f"Event listener error: {e}")
+            log.exception("Event listener error: %s", e)
 
 
 async def _handle_agreement(escrow, agreement_id: int, args: dict) -> None:

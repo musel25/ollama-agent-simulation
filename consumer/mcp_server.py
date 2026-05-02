@@ -108,18 +108,22 @@ def lock_payment(agreement_id: str) -> str:
         return f"ERROR: {e}"
 
 
+_SETTLEMENT_POLL_ATTEMPTS = 20
+_SETTLEMENT_POLL_INTERVAL_S = 1.5
+
+
 @mcp.tool()
-def await_settlement(agreement_id: str, max_attempts: int = 8) -> str:
+def await_settlement(agreement_id: str) -> str:
     """
-    Poll escrow.getAgreement until status==ACTIVE, max_attempts.
-    Returns "OK tokenId=N" or "PENDING".
+    Poll escrow.getAgreement until status==ACTIVE (~30s max).
+    Returns "OK tokenId=N", "ERROR ...", or "PENDING".
     """
     try:
         aid = int(agreement_id)
     except (ValueError, TypeError):
         return f"ERROR: agreement_id must be a number, got {agreement_id!r}"
     escrow = get_escrow_contract(_w3)
-    for attempt in range(max_attempts):
+    for _ in range(_SETTLEMENT_POLL_ATTEMPTS):
         try:
             ag = escrow.functions.getAgreement(aid).call()
             status = _STATUS_NAMES.get(ag[7], "UNKNOWN")
@@ -129,7 +133,7 @@ def await_settlement(agreement_id: str, max_attempts: int = 8) -> str:
                 return f"ERROR: agreement is {status}"
         except Exception as e:
             return f"ERROR reading agreement: {e}"
-        time.sleep(2)
+        time.sleep(_SETTLEMENT_POLL_INTERVAL_S)
     return "PENDING"
 
 

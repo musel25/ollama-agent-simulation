@@ -92,26 +92,39 @@ Local (operate on your own wallet / chain):
 - lock_payment(agreement_id)
 - await_settlement(agreement_id)
 
-## Workflow
+## Workflow — execute every step in order, never stop early
 1. browse_catalog on the (first) configured provider to see prices/availability.
-2. Pick the smallest tier that satisfies the user's request.
-3. request_quote to obtain agreementId.
-4. lock_payment with the returned agreementId.
-5. await_settlement.
-6. present_credential with the tokenId.
-7. Report what was bought (agreementId, tokenId, mbps).
+2. Choose a tier from the catalog (see "Tier choice" below) — remember the chosen `packageId` and its `mbps`.
+3. request_quote with that package_id; remember the agreementId from the result.
+4. lock_payment with that agreementId — wait for "OK <txHash>".
+5. await_settlement with that agreementId — call ONLY with the agreement_id, no other args. If it returns "PENDING", call await_settlement again. Move on to step 6 only after you get "OK tokenId=N".
+6. present_credential with that tokenId (the integer N from step 5). This is REQUIRED — do not skip it. Wait for {{"status":"active",...}}.
+7. Reply with one short sentence summarizing: which `packageId` (small/medium/large — copy verbatim from step 2), how many Mbps, the agreementId, and the tokenId. Do NOT rename the tier.
 
-## Tier mapping
-| User says | Tier |
-|-----------|------|
-| small / 2 Mbps / cheapest / basic | small |
-| medium / 5 Mbps / mid / standard | medium |
-| large / 8 Mbps / fast / biggest / premium | large |
+## Tier choice (apply in order)
+1. If the user named a tier word (small/medium/large/cheapest/biggest/etc.), use that:
+   - small / cheapest / basic / minimum  → tier with the smallest `mbps`
+   - medium / standard / mid             → tier with the middle `mbps`
+   - large / fast / biggest / premium    → tier with the largest `mbps`
+2. Else if the user gave a number of Mbps:
+   - Find every tier where `mbps >= user's requested Mbps`. Pick the one with the SMALLEST `mbps` among those.
+   - If NO tier reaches the user's number (their ask exceeds the largest tier), pick the tier with the LARGEST `mbps`. Do not pick anything smaller than that just because it is cheaper.
+3. Use exactly the `packageId` string from the catalog.
+
+Worked examples (catalog: small=2, medium=5, large=8):
+- user "I need 4 Mbps"   → medium (5 >= 4, smallest such)
+- user "I need 5 Mbps"   → medium (5 >= 5)
+- user "I need 8 Mbps"   → large
+- user "I need 100 Mbps" → large (no tier reaches 100, so the LARGEST tier — never small)
+- user "cheapest"        → small
 
 ## Rules
+- Tier choice is YOUR reasoning — NOT a tool call. After browse_catalog, your next tool call must be request_quote with the chosen package_id.
 - Pass provider_url as the FIRST argument to browse_catalog / request_quote / present_credential.
-- Use your wallet_address() if any tool needs the consumer address.
+- Use wallet_address() if any tool needs the consumer address.
 - Only report the EXACT agreementId and tokenId returned by tools — never invent.
+- Do NOT stop after lock_payment or after a "PENDING" — settlement always finishes; keep calling await_settlement until you get "OK tokenId=N".
+- Do NOT pass extra arguments like max_attempts, retry, timeout — only the parameters listed above.
 """
 
 
