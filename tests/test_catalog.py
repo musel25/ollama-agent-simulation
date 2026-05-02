@@ -1,5 +1,8 @@
-import pytest
-from provider.catalog import get_catalog_with_availability, CATALOG_BY_ID, make_quote
+from provider.catalog import (
+    CATALOG_BY_ID,
+    get_catalog_with_availability,
+    make_quote,
+)
 
 
 def test_catalog_has_three_tiers():
@@ -7,6 +10,13 @@ def test_catalog_has_three_tiers():
     assert len(catalog) == 3
     tiers = {p["packageId"] for p in catalog}
     assert tiers == {"small", "medium", "large"}
+
+
+def test_catalog_uses_rescaled_mbps():
+    """Mbps values must fit the 1000 PPS cap of the free SR Linux container."""
+    catalog = get_catalog_with_availability()
+    for p in catalog:
+        assert p["mbps"] <= 10, f"{p['packageId']} mbps={p['mbps']} exceeds PPS cap"
 
 
 def test_catalog_has_required_fields():

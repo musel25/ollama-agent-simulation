@@ -1,15 +1,26 @@
-import fcntl
-import json
+"""
+Catalog and quote logic for the provider.
+
+State is split:
+- Tier metadata (mbps, price) lives in the in-memory CATALOG dict.
+- Slot availability (which subinterface, leased or free) lives in
+  inventory.txt via SlotPool.
+- Quotes (agreementId → quote params) live in pending_quotes (in-memory).
+"""
+from __future__ import annotations
+
 import secrets
 import time
 from pathlib import Path
 
 from web3 import Web3
 
+from shared.slot_pool import SlotPool
+
 CATALOG: list[dict] = [
-    {"packageId": "small",  "mbps": 50,  "durationSeconds": 600, "priceWei": Web3.to_wei(0.01, "ether")},
-    {"packageId": "medium", "mbps": 100, "durationSeconds": 600, "priceWei": Web3.to_wei(0.02, "ether")},
-    {"packageId": "large",  "mbps": 500, "durationSeconds": 600, "priceWei": Web3.to_wei(0.08, "ether")},
+    {"packageId": "small",  "mbps": 2, "durationSeconds": 600, "priceWei": Web3.to_wei(0.01, "ether")},
+    {"packageId": "medium", "mbps": 5, "durationSeconds": 600, "priceWei": Web3.to_wei(0.02, "ether")},
+    {"packageId": "large",  "mbps": 8, "durationSeconds": 600, "priceWei": Web3.to_wei(0.08, "ether")},
 ]
 CATALOG_BY_ID: dict[str, dict] = {p["packageId"]: p for p in CATALOG}
 
@@ -18,84 +29,15 @@ QUOTE_TTL = 60
 
 pending_quotes: dict[int, dict] = {}
 
-
-def _read_inventory_locked(f) -> list[dict]:
-    f.seek(0)
-    now = time.time()
-    rows = []
-    for line in f.read().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        row = json.loads(line)
-        row["activeLeases"] = [l for l in row["activeLeases"] if l["expiresAt"] > now]
-        rows.append(row)
-    return rows
-
-
-def _write_inventory_locked(f, rows: list[dict]) -> None:
-    f.seek(0)
-    f.truncate()
-    for row in rows:
-        f.write(json.dumps(row) + "\n")
-
-
-def _available_slots(row: dict) -> int:
-    now = time.time()
-    active = sum(1 for l in row["activeLeases"] if l["expiresAt"] > now)
-    return row["totalSlots"] - active
+slot_pool = SlotPool(INVENTORY_FILE)
 
 
 def get_catalog_with_availability() -> list[dict]:
-    with open(INVENTORY_FILE, "r+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            rows = _read_inventory_locked(f)
-            _write_inventory_locked(f, rows)
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
-    row_by_tier = {r["tier"]: r for r in rows}
-    result = []
-    for pkg in CATALOG:
-        row = row_by_tier.get(pkg["packageId"], {})
-        available = _available_slots(row) if row else 0
-        result.append({**pkg, "availableSlots": available})
-    return result
-
-
-def decrement_inventory(tier: str, agreement_id: int, duration_seconds: int) -> bool:
-    with open(INVENTORY_FILE, "r+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            rows = _read_inventory_locked(f)
-            for row in rows:
-                if row["tier"] == tier:
-                    if _available_slots(row) <= 0:
-                        return False
-                    row["activeLeases"].append({
-                        "agreementId": agreement_id,
-                        "expiresAt": time.time() + duration_seconds,
-                    })
-                    _write_inventory_locked(f, rows)
-                    return True
-            return False
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
-
-
-def rewind_inventory(tier: str, agreement_id: int) -> None:
-    with open(INVENTORY_FILE, "r+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            rows = _read_inventory_locked(f)
-            for row in rows:
-                if row["tier"] == tier:
-                    row["activeLeases"] = [
-                        l for l in row["activeLeases"] if l["agreementId"] != agreement_id
-                    ]
-            _write_inventory_locked(f, rows)
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+    avail_by_tier = {t["tier"]: t["availableSlots"] for t in slot_pool.tiers()}
+    return [
+        {**pkg, "availableSlots": avail_by_tier.get(pkg["packageId"], 0)}
+        for pkg in CATALOG
+    ]
 
 
 def cleanup_quotes() -> None:
@@ -106,13 +48,10 @@ def cleanup_quotes() -> None:
 
 
 def make_quote(package_id: str, consumer_address: str) -> dict | None:
-    """Generate and store a quote. Returns quote dict or None if package unavailable."""
     pkg = CATALOG_BY_ID.get(package_id)
     if pkg is None:
         return None
-    catalog = get_catalog_with_availability()
-    tier_info = next((c for c in catalog if c["packageId"] == package_id), None)
-    if not tier_info or tier_info["availableSlots"] <= 0:
+    if slot_pool.available_count(package_id) <= 0:
         return None
     agreement_id = int.from_bytes(secrets.token_bytes(16), "big")
     pending_quotes[agreement_id] = {
