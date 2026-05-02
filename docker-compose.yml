@@ -75,10 +75,11 @@ services:
         condition: service_completed_successfully
     ports:
       - "8002:8002"
-      - "8003:8003"
     environment:
       - RPC_URL=http://anvil:8545
       - PROVIDER_PRIVATE_KEY=${PROVIDER_PRIVATE_KEY}
+      - PROVIDER_BASE_URL=http://provider-agent:8002
+      - SDN_MOCK=${SDN_MOCK:-true}
     volumes:
       - ./contracts/deployments:/app/contracts/deployments:ro
       - ./provider/inventory.txt:/app/provider/inventory.txt
@@ -99,9 +100,8 @@ services:
     environment:
       - RPC_URL=http://anvil:8545
       - CONSUMER_PRIVATE_KEY=${CONSUMER_PRIVATE_KEY}
-      - PROVIDER_BASE_URL=http://provider-agent:8002
-      - GATEWAY_BASE_URL=http://provider-agent:8003
-      - PROVIDER_MCP_URL=http://provider-agent:8002/mcp
+      - PROVIDER_A2A_URL=http://provider-agent:8002/a2a
+      - PROVIDER_AGENT_CARD_URL=http://provider-agent:8002/.well-known/agent-card.json
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:4b}
       - OLLAMA_HOST=http://ollama:11434
     extra_hosts:
