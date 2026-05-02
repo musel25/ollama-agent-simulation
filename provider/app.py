@@ -13,12 +13,18 @@ import time
 from contextlib import asynccontextmanager
 
 import uvicorn
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
+from a2a.server.tasks import InMemoryTaskStore
 from eth_account import Account
 from fastapi import FastAPI, HTTPException
 from fastmcp import Client as MCPClient
+from google.protobuf.json_format import MessageToDict
 from pydantic import BaseModel
 from web3 import Web3
 
+from provider.agent_card import build_provider_agent_card
+from provider.agent_executor import BandwidthProviderExecutor
 from provider.catalog import (
     CATALOG_BY_ID,
     cleanup_quotes,
@@ -40,21 +46,8 @@ w3 = Web3(Web3.HTTPProvider(RPC_URL))
 provider_account = Account.from_key(PROVIDER_PRIVATE_KEY)
 PROVIDER_ADDRESS = provider_account.address
 
-AGENT_CARD = {
-    "name": "Bandwidth Provider Agent",
-    "description": "Sells bandwidth packages via atomic smart contract escrow. Issues NFT entitlements on payment.",
-    "version": "2.0.0",
-    "protocols": ["a2a", "mcp"],
-    "mcp_endpoint": "/mcp",
-    "skills": [
-        {"id": "get_catalog", "name": "Get Catalog",
-         "description": "Returns available bandwidth tiers with pricing and slot availability."},
-        {"id": "request_quote", "name": "Request Quote",
-         "description": "Issues a quote with agreementId for on-chain ETH escrow settlement."},
-        {"id": "activate", "name": "Activate Service",
-         "description": "Verifies NFT credential and triggers SDN allocation."},
-    ],
-}
+_provider_agent_card = build_provider_agent_card()
+_AGENT_CARD_JSON = MessageToDict(_provider_agent_card, preserving_proto_field_name=True)
 
 
 async def _event_listener() -> None:
@@ -152,9 +145,14 @@ class QuoteRequest(BaseModel):
     consumerAddress: str
 
 
+@app.get("/.well-known/agent-card.json")
+def agent_card_canonical() -> dict:
+    return _AGENT_CARD_JSON
+
+
 @app.get("/.well-known/agent.json")
-def agent_card() -> dict:
-    return AGENT_CARD
+def agent_card_legacy() -> dict:
+    return _AGENT_CARD_JSON
 
 
 @app.get("/catalog")
@@ -180,7 +178,17 @@ def provider_address() -> dict:
     return {"address": PROVIDER_ADDRESS}
 
 
-# MCP mounted last so REST routes above are matched first by Starlette's router.
+_a2a_handler = DefaultRequestHandler(
+    agent_executor=BandwidthProviderExecutor(),
+    task_store=InMemoryTaskStore(),
+    agent_card=_provider_agent_card,
+)
+for route in create_agent_card_routes(_provider_agent_card):
+    app.router.routes.append(route)
+for route in create_jsonrpc_routes(_a2a_handler, "/a2a"):
+    app.router.routes.append(route)
+
+# MCP mounted last so all preceding routes are matched first by Starlette's router.
 app.mount("/", _mcp_http_app)
 
 
