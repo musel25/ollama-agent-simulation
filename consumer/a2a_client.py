@@ -51,14 +51,26 @@ async def send_provider_action(provider_url: str, payload: dict) -> dict:
         request = SendMessageRequest(message=msg)
 
         async for chunk in client.send_message(request):
-            au = getattr(chunk, "artifact_update", None)
-            if au is None:
-                continue
-            artifact = getattr(au, "artifact", None)
-            if artifact is None:
-                continue
-            for part in artifact.parts:
-                data = getattr(part, "data", None)
-                if data is not None:
-                    return MessageToDict(data, preserving_proto_field_name=True)
+            artifacts = []
+            which = chunk.WhichOneof("payload") if hasattr(chunk, "WhichOneof") else None
+            if which == "artifact_update":
+                au = chunk.artifact_update
+                if au.artifact is not None:
+                    artifacts.append(au.artifact)
+            elif which == "task":
+                task = chunk.task
+                artifacts.extend(getattr(task, "artifacts", []) or [])
+            else:
+                au = getattr(chunk, "artifact_update", None)
+                if au is not None and getattr(au, "artifact", None) is not None:
+                    artifacts.append(au.artifact)
+                task = getattr(chunk, "task", None)
+                if task is not None:
+                    artifacts.extend(getattr(task, "artifacts", []) or [])
+
+            for artifact in artifacts:
+                for part in artifact.parts:
+                    data = getattr(part, "data", None)
+                    if data is not None:
+                        return MessageToDict(data, preserving_proto_field_name=True)
         raise RuntimeError("provider returned no artifacts")

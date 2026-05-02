@@ -4,7 +4,7 @@
 
 This is a proof-of-concept where a **Consumer AI** and a **Provider AI** interact using the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), agree on a bandwidth package, and settle the payment using a real Ethereum smart contract (running locally). No real money, no real internet traffic — just a working demonstration of what autonomous AI-to-AI commerce could look like.
 
-**Key protocols:** The Provider exposes an MCP server at `/mcp` so any MCP-compatible agent (Claude, GPT-4, Ollama) can discover and call its tools without custom integration. Both agents advertise their capabilities via an A2A Agent Card at `/.well-known/agent.json`.
+**Key protocols:** The Provider exposes a FastMCP server at `/mcp` and an A2A JSON-RPC endpoint at `/a2a`. Both agents advertise their capabilities via an A2A Agent Card at `/.well-known/agent-card.json`. Inside the consumer, the LLM only sees a small set of MCP tools (`query_provider_catalog`, `purchase_package`, …); the consumer's own MCP server then drives the A2A client end-to-end so the LLM never has to know about A2A.
 
 ---
 
@@ -15,7 +15,7 @@ This is a proof-of-concept where a **Consumer AI** and a **Provider AI** interac
 3. The Consumer Agent calls the **Provider Agent** to get a price quote.
 4. It locks ETH into a smart contract (on a local test blockchain — no real money).
 5. The Provider mints an **NFT** that proves you own the bandwidth service, and the escrow releases the ETH to the provider atomically.
-6. The Consumer Agent calls the **Gateway** (which checks the NFT on-chain) and reports back your active service details.
+6. The Provider's A2A executor activates the bandwidth slot (mock or real ContainerLab + tc) and the Consumer Agent reports back your active service details.
 
 All of this happens automatically — you just watch the agents work.
 
@@ -31,13 +31,14 @@ Consumer UI  (:8501)        ← Streamlit web app
    │  POST /chat
    ▼
 Consumer Agent  (:8001)     ← FastAPI + Ollama LLM
-   │  discovers provider via /.well-known/agent.json  (A2A Agent Card)
+   │  LLM tools = local MCP server only (query_provider_catalog, purchase_package, …)
+   │  discovers provider via /.well-known/agent-card.json  (A2A Agent Card)
    │
-   ├─ MCP tools/list  ─────────────────────────► Provider Agent  (:8002/mcp)
-   │   get_catalog()  ◄─────── MCP ────────────┘  FastMCP server
+   ├─ MCP get_catalog  ─────────────────────────► Provider Agent  (:8002/mcp)
+   │   tools/list + tools/call ◄── FastMCP ─────┘  catalog, quote, address
    │
-   ├─ MCP tools/call  ─────────────────────────► Provider Agent  (:8002/mcp)
-   │   request_quote(package_id) ◄── MCP ───────┘  returns agreementId
+   ├─ A2A purchase task  ───────────────────────► Provider Agent  (:8002/a2a)
+   │   JSON-RPC message/send ◄── A2A SDK ───────┘  returns agreementId + price
    │
    ├─ requestAgreement()  ─────────────────────► BandwidthEscrow  (Anvil :8545)
    │    Consumer locks ETH on-chain               Smart contract holds funds
@@ -46,9 +47,9 @@ Consumer Agent  (:8001)     ← FastAPI + Ollama LLM
    │                                              Provider calls deposit()
    │                                              Atomic swap: ETH → Provider, NFT → Consumer
    │
-   └─ GET /service  ───────────────────────────► Gateway  (:8003)
-        (signed nonce + tokenId)                 checks ownerOf() on-chain
-        service details ◄──────────────────────┘
+   └─ A2A activate task  ───────────────────────► Provider Agent  (:8002/a2a)
+        signed nonce + tokenId                    executor verifies ownerOf() on-chain
+        service details ◄──────────────────────┘  allocate_bandwidth (mock or clab+tc)
 ```
 
 ### Services at a glance
@@ -56,9 +57,8 @@ Consumer Agent  (:8001)     ← FastAPI + Ollama LLM
 | Service | Port | What it does |
 |---------|------|-------------|
 | Anvil (local blockchain) | 8545 | Runs a fake Ethereum chain for testing |
-| Provider Agent | 8002 | Sells bandwidth — FastMCP server at `/mcp`, A2A Agent Card at `/.well-known/agent.json` |
-| Gateway | 8003 | Verifies NFT ownership before giving access to the service |
-| Consumer Agent | 8001 | Buys bandwidth — LLM uses MCP to call provider tools, A2A Agent Card at `/.well-known/agent.json` |
+| Provider Agent | 8002 | Sells bandwidth — FastMCP at `/mcp`, A2A JSON-RPC at `/a2a`, Agent Card at `/.well-known/agent-card.json`. The A2A executor mints the NFT and activates the slot (mock or ContainerLab + `tc`) |
+| Consumer Agent | 8001 | Buys bandwidth — LLM uses an in-process MCP server whose tools call the provider over MCP + A2A. Agent Card at `/.well-known/agent-card.json` |
 | Consumer UI | 8501 | The chat interface you talk to |
 
 ---
@@ -121,7 +121,7 @@ That's it. Docker Compose will:
 
 ### Option B — Run locally (no Docker)
 
-Useful for development. Open six terminals:
+Useful for development. Open five terminals:
 
 ```bash
 # Terminal 1: Local blockchain
@@ -134,16 +134,13 @@ cd contracts && forge script script/Deploy.s.sol \
   --broadcast \
   --private-key $DEPLOYER_PRIVATE_KEY
 
-# Terminal 3: Provider service (catalog + quotes + event listener)
+# Terminal 3: Provider service (MCP @ /mcp, A2A @ /a2a, event listener, NFT mint, slot activation)
 source .env && uv run uvicorn provider.app:app --port 8002
 
-# Terminal 4: Gateway (NFT-gated access check)
-source .env && uv run uvicorn provider.gateway:app --port 8003
-
-# Terminal 5: Consumer agent (LLM lives here)
+# Terminal 4: Consumer agent (LLM lives here)
 source .env && uv run uvicorn consumer.app:app --port 8001
 
-# Terminal 6: Web UI
+# Terminal 5: Web UI
 source .env && uv run streamlit run consumer/ui.py
 ```
 
@@ -233,14 +230,20 @@ contracts/
   deployments/
     local.json              Auto-generated: contract addresses after deployment
 
-consumer/
-  app.py                    FastAPI :8001 — the LLM reasoning loop runs here
-  ui.py                     Streamlit :8501 — the chat UI (thin HTTP client)
-
 provider/
-  app.py                    FastAPI :8002 — catalog, quotes, AgreementRequested listener
-  gateway.py                FastAPI :8003 — checks NFT ownership before serving data
+  app.py                    FastAPI :8002 — catalog, quotes, AgreementRequested listener; mounts MCP at /mcp and A2A JSON-RPC at /a2a
+  agent_executor.py         A2A executor: mints NFT, verifies ownership, activates the slot (mock or ContainerLab + tc)
+  agent_card.py             Builds the /.well-known/agent-card.json card (skills, capabilities, MCP/A2A URLs)
+  mcp_server.py             FastMCP tools: get_catalog, request_quote, provider_address
+  expiry.py                 Background sweeper that releases expired slots
   inventory.txt             Per-tier slot counts with lease expiration timestamps
+
+consumer/
+  app.py                    FastAPI :8001 — runs the Ollama tool-calling loop
+  mcp_server.py             In-process MCP server the LLM sees (query_provider_catalog, purchase_package, …)
+  a2a_client.py             A2A client used by the consumer's MCP tools to talk to the provider
+  agent_card.py             Builds the consumer's /.well-known/agent-card.json
+  ui.py                     Streamlit :8501 — chat UI
 
 shared/
   contracts.py              Loads deployed contract addresses + Web3 contract objects
@@ -255,13 +258,14 @@ docs/
 ## What this PoC does and doesn't do
 
 **Does:**
-- **MCP tool calling**: Provider exposes a FastMCP server; consumer LLM discovers and calls tools dynamically — any MCP-compatible agent can use it without custom integration
-- **A2A Agent Cards**: Both agents serve `/.well-known/agent.json` advertising capabilities and MCP endpoint (A2A discovery pattern)
+- **MCP tool calling**: Provider exposes a FastMCP server at `/mcp`; the consumer's own MCP server (which the LLM talks to) calls it for catalog/quote operations
+- **A2A messaging**: Provider mounts an A2A JSON-RPC endpoint at `/a2a` (purchase + activation skills) using the official `a2a-sdk` `DefaultRequestHandler` + `InMemoryTaskStore`
+- **A2A Agent Cards**: Both agents serve `/.well-known/agent-card.json` (with a legacy `/.well-known/agent.json` alias) advertising capabilities, skills, and protocol URLs
 - End-to-end autonomous purchase: consumer LLM interprets natural language, picks a package, and completes payment without human help
 - Double-escrow atomic swap: ETH from consumer and NFT from provider are exchanged in a single `deposit()` transaction — neither party can cheat
 - Fully on-chain NFT entitlement: `bandwidthMbps`, `durationSeconds`, `startTime`, and `endpoint` stored directly in the token (no IPFS)
-- NFT-gated gateway: access is verified by checking `ownerOf()` on-chain using a signed Ethereum nonce (replay-safe)
-- Per-tier slot inventory with time-based lease expiration
+- NFT-gated activation: the A2A executor verifies `ownerOf()` on-chain (signed Ethereum nonce, replay-safe) before allocating bandwidth
+- Per-tier slot inventory with time-based lease expiration and a background sweeper that releases expired slots
 
 **Does not:**
 - Enforce bandwidth at the network layer (no QoS, no traffic shaping, no real hardware)

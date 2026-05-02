@@ -71,9 +71,11 @@ def _make_data_part(data: dict) -> Part:
 
 class BandwidthProviderExecutor(AgentExecutor):
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        task_id = context.task_id
+        context_id = context.context_id
         data = self._extract_data_part(context)
         if data is None:
-            await self._emit_error(event_queue, context.task_id,
+            await self._emit_error(event_queue, task_id, context_id,
                                    "expected message with a single data part")
             return
 
@@ -81,35 +83,36 @@ class BandwidthProviderExecutor(AgentExecutor):
         try:
             if action == "get_catalog":
                 BrowseCatalogRequest.model_validate(data)
-                await self._handle_catalog(event_queue, context.task_id)
+                await self._handle_catalog(event_queue, task_id, context_id)
             elif action == "request_quote":
                 req = QuoteRequest.model_validate(data)
-                await self._handle_quote(event_queue, context.task_id, req)
+                await self._handle_quote(event_queue, task_id, context_id, req)
             elif action == "activate":
                 req = ActivateRequest.model_validate(data)
-                await self._handle_activate(event_queue, context.task_id, req)
+                await self._handle_activate(event_queue, task_id, context_id, req)
             else:
-                await self._emit_error(event_queue, context.task_id,
+                await self._emit_error(event_queue, task_id, context_id,
                                        f"unknown action: {action!r}")
         except Exception as e:
             log.exception("Executor error")
-            await self._emit_error(event_queue, context.task_id, str(e))
+            await self._emit_error(event_queue, task_id, context_id, str(e))
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
                 task_id=context.task_id,
+                context_id=context.context_id,
                 status=TaskStatus(state=TaskState.TASK_STATE_CANCELED),
             )
         )
 
-    async def _handle_catalog(self, queue: EventQueue, task_id: str) -> None:
+    async def _handle_catalog(self, queue: EventQueue, task_id: str, context_id: str) -> None:
         async with MCPClient(mcp) as client:
             result = await client.call_tool("get_catalog", {})
             payload = json.loads(result.content[0].text)
-        await self._emit_data(queue, task_id, {"catalog": payload})
+        await self._emit_data(queue, task_id, context_id, {"catalog": payload})
 
-    async def _handle_quote(self, queue: EventQueue, task_id: str, req: QuoteRequest) -> None:
+    async def _handle_quote(self, queue: EventQueue, task_id: str, context_id: str, req: QuoteRequest) -> None:
         async with MCPClient(mcp) as client:
             result = await client.call_tool("request_quote", {
                 "package_id": req.package_id,
@@ -117,16 +120,16 @@ class BandwidthProviderExecutor(AgentExecutor):
             })
             data = json.loads(result.content[0].text)
         if "error" in data:
-            await self._emit_data(queue, task_id, {"error": data["error"]})
+            await self._emit_data(queue, task_id, context_id, {"error": data["error"]})
             return
-        await self._emit_data(queue, task_id, {
+        await self._emit_data(queue, task_id, context_id, {
             "agreementId": str(data["agreementId"]),
             "priceWei": data["priceWei"],
             "bandwidthMbps": data["bandwidthMbps"],
             "durationSeconds": data["durationSeconds"],
         })
 
-    async def _handle_activate(self, queue: EventQueue, task_id: str, req: ActivateRequest) -> None:
+    async def _handle_activate(self, queue: EventQueue, task_id: str, context_id: str, req: ActivateRequest) -> None:
         async with MCPClient(mcp) as client:
             verify = await client.call_tool(
                 "verify_credential_ownership",
@@ -134,7 +137,7 @@ class BandwidthProviderExecutor(AgentExecutor):
             )
             v = json.loads(verify.content[0].text)
             if not v.get("ok"):
-                await self._emit_data(queue, task_id, {
+                await self._emit_data(queue, task_id, context_id, {
                     "status": "denied",
                     "reason": v.get("reason", "verification failed"),
                 })
@@ -142,7 +145,7 @@ class BandwidthProviderExecutor(AgentExecutor):
 
             slot = slot_pool.lookup(int(v["agreement_id"]))
             if slot is None:
-                await self._emit_data(queue, task_id, {
+                await self._emit_data(queue, task_id, context_id, {
                     "status": "denied",
                     "reason": f"no slot bound to agreement {v['agreement_id']}",
                 })
@@ -159,7 +162,7 @@ class BandwidthProviderExecutor(AgentExecutor):
             )
             alloc_data = json.loads(alloc.content[0].text)
 
-        await self._emit_data(queue, task_id, {
+        await self._emit_data(queue, task_id, context_id, {
             "status": "active",
             "bandwidth_mbps": int(v["mbps"]),
             "seconds_remaining": int(v.get("seconds_remaining", 0)),
@@ -182,10 +185,11 @@ class BandwidthProviderExecutor(AgentExecutor):
                 return converted
         return None
 
-    async def _emit_data(self, queue: EventQueue, task_id: str, data: dict) -> None:
+    async def _emit_data(self, queue: EventQueue, task_id: str, context_id: str, data: dict) -> None:
         await queue.enqueue_event(
             TaskArtifactUpdateEvent(
                 task_id=task_id,
+                context_id=context_id,
                 artifact=Artifact(
                     artifact_id="result",
                     parts=[_make_data_part(data)],
@@ -195,14 +199,16 @@ class BandwidthProviderExecutor(AgentExecutor):
         await queue.enqueue_event(
             TaskStatusUpdateEvent(
                 task_id=task_id,
+                context_id=context_id,
                 status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
             )
         )
 
-    async def _emit_error(self, queue: EventQueue, task_id: str, message: str) -> None:
+    async def _emit_error(self, queue: EventQueue, task_id: str, context_id: str, message: str) -> None:
         await queue.enqueue_event(
             TaskArtifactUpdateEvent(
                 task_id=task_id,
+                context_id=context_id,
                 artifact=Artifact(
                     artifact_id="error",
                     parts=[_make_data_part(ErrorResponse(error=message).model_dump())],
@@ -212,6 +218,7 @@ class BandwidthProviderExecutor(AgentExecutor):
         await queue.enqueue_event(
             TaskStatusUpdateEvent(
                 task_id=task_id,
+                context_id=context_id,
                 status=TaskStatus(state=TaskState.TASK_STATE_FAILED),
             )
         )

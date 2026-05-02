@@ -134,9 +134,13 @@ _mcp_http_app = mcp.http_app()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with _mcp_http_app.lifespan(app):
-        asyncio.create_task(_event_listener())
-        asyncio.create_task(expiry_sweep_loop(period_seconds=30))
-        yield
+        listener_task = asyncio.create_task(_event_listener())
+        expiry_task = asyncio.create_task(expiry_sweep_loop(period_seconds=30))
+        try:
+            yield
+        finally:
+            listener_task.cancel()
+            expiry_task.cancel()
 
 
 app = FastAPI(title="Bandwidth Provider", lifespan=lifespan)
