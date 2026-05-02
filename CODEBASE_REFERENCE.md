@@ -5,7 +5,15 @@
 
 ## 1. PROJECT IDENTITY
 
-**ollama-agent-simulation** is a proof-of-concept multi-agent simulation where two autonomous AI agents — a Consumer and a Provider — negotiate, pay for, and activate internet bandwidth packages without human intervention. The Consumer agent (LLM via Ollama) interprets natural-language requests, calls the Provider's MCP server to discover catalog and price, then executes an on-chain escrow swap on a local Ethereum chain (Anvil). The Provider mints an ERC-721 NFT entitlement and deposits it atomically against the locked ETH. A separate Gateway service verifies NFT ownership before serving bandwidth metadata. Both agents advertise capabilities via A2A Agent Cards (`/.well-known/agent.json`). This is a research prototype accompanying an academic paper; no real money or network traffic is involved.
+**ollama-agent-simulation** is a proof-of-concept multi-agent simulation where two autonomous AI agents — a Consumer and a Provider — negotiate, pay for, and activate internet bandwidth packages without human intervention.
+
+Architecturally it follows the paper's split:
+- **A2A is the inter-agent protocol.** Consumer ↔ Provider talk over Google's Agent2Agent SDK (JSON-RPC `message/send`, agent cards at `/.well-known/agent-card.json`). The provider's three skills are `get_catalog`, `request_quote`, and `activate`.
+- **MCP is the intra-agent tool-invocation protocol.** Each agent runs its own FastMCP server. The LLM (or the inbound A2A executor) only calls its own MCP — never the other agent's. Cross-agent calls are wrapped inside MCP tools that internally use A2A.
+- **SDN activation is real.** On `activate`, the provider verifies the NFT credential then calls `srl_bandwidth.allocate_bandwidth` (gNMI policer push to Nokia SR Linux + Linux `tc tbf` on the connected CE container) via the sibling repo `srl-gnmi-bandwidth-poc`. `SDN_MOCK=true` short-circuits this for CI/dev.
+- **Atomic on-chain settlement.** Consumer locks ETH via `BandwidthEscrow.requestAgreement`; provider mints an ERC-721 credential via `BandwidthNFT.mint`; `BandwidthEscrow.deposit` swaps ETH→provider and NFT→consumer atomically. The previous standalone `provider/gateway.py` is gone — its role (signature/nonce/ownerOf check) is now an MCP tool the activate-handler calls.
+
+This is a research prototype accompanying an academic paper.
 
 **IMPORTANT:** There are two generations of code in this repo. The **legacy prototype** (`app.py`, `consumer_agent.py`, `provider_server.py`, `catalog.txt`, `agreements.json`) uses plain HTTP and no blockchain. The **current production codebase** lives in `consumer/`, `provider/`, and `shared/` packages and uses MCP + Ethereum. The legacy files are dead code for the purpose of any active development.
 
@@ -15,11 +23,13 @@
 
 | Component | Version | Role |
 |---|---|---|
-| Python | ≥3.11 (3.13 in Docker) | Runtime for all Python services |
+| Python | ≥3.13 | Runtime for all Python services |
 | uv | 0.8.22 | Dependency & venv management |
-| FastAPI | ≥0.136.0 | HTTP framework for consumer (:8001), provider (:8002), gateway (:8003) |
+| FastAPI | ≥0.136.0 | HTTP framework for consumer (:8001), provider (:8002) |
 | Uvicorn | ≥0.44.0 (standard) | ASGI server |
-| FastMCP | ≥3.2.4 | MCP server (provider side) and MCP client (consumer side) |
+| FastMCP | ≥3.2.4 | Per-agent MCP server (provider + consumer); used in-memory via `Client(mcp)` |
+| a2a-sdk | ≥1.0,<2.0 | Inter-agent protocol — agent cards, JSON-RPC `message/send`, executor |
+| srl-bandwidth | git pin | Brother repo: gNMI policer push + Linux tc enforcement (real SDN) |
 | Ollama Python SDK | ≥0.6.1 | Drives local LLM inference; `ollama.AsyncClient` for tool-calling loop |
 | Streamlit | ≥1.56.0 | Chat UI at :8501 |
 | web3.py | ≥6.0,<7 | Ethereum JSON-RPC client; signs and sends transactions |
@@ -43,19 +53,25 @@
 ollama-agent-simulation/
 ├── consumer/                  # Consumer agent package
 │   ├── __init__.py
-│   ├── app.py                 # FastAPI app :8001 — LLM loop, all endpoints
-│   ├── mcp_client.py          # MCP client utilities + quote_cache
+│   ├── app.py                 # FastAPI :8001 — LLM loop, agent card, /catalog_proxy
+│   ├── agent_card.py          # a2a.types.AgentCard for the consumer
+│   ├── a2a_client.py          # send_provider_action(url, payload) — single A2A round-trip
+│   ├── mcp_server.py          # FastMCP — wallet/sign/lock_payment/await + browse/quote/present
 │   └── ui.py                  # Streamlit app :8501
 ├── provider/                  # Provider agent package
 │   ├── __init__.py
-│   ├── app.py                 # FastAPI app :8002 — catalog, quotes, event listener
-│   ├── catalog.py             # In-memory catalog + file-locked inventory management
-│   ├── gateway.py             # FastAPI app :8003 — NFT-gated service check
-│   ├── mcp_server.py          # FastMCP server — exposes get_catalog, request_quote as MCP tools
-│   └── inventory.txt          # Mutable state: per-tier slot counts + active leases (JSONL)
+│   ├── app.py                 # FastAPI :8002 — catalog/quote REST + A2A JSON-RPC routes + event listener
+│   ├── agent_card.py          # a2a.types.AgentCard for the provider (3 skills: catalog, quote, activate)
+│   ├── agent_executor.py      # BandwidthProviderExecutor — A2A → in-memory MCP bridge
+│   ├── catalog.py             # CATALOG dict + slot_pool reference + pending_quotes
+│   ├── expiry.py              # Asyncio sweep that revokes SDN on slot lease expiry
+│   ├── mcp_server.py          # FastMCP — 8 tools (catalog, quote, verify, mint, swap, allocate/revoke/verify_bw)
+│   └── inventory.txt          # Mutable state: per-tier slots with (pe, subinterface, ce) bindings (JSONL)
 ├── shared/                    # Cross-service utilities
 │   ├── __init__.py
+│   ├── a2a_messages.py        # Pydantic schemas for A2A `data` parts (request/response shapes)
 │   ├── contracts.py           # Loads deployed addresses + returns web3 contract objects
+│   ├── slot_pool.py           # File-backed (pe, subinterface, ce) slot reservations, fcntl-locked
 │   └── abi/
 │       ├── BandwidthEscrow.json  # ABI for BandwidthEscrow — used by provider/app.py, consumer/app.py, provider/gateway.py
 │       └── BandwidthNFT.json    # ABI for BandwidthNFT — used by provider/app.py, consumer/app.py, provider/gateway.py
@@ -71,12 +87,15 @@ ollama-agent-simulation/
 │   └── foundry.lock
 ├── tests/
 │   ├── __init__.py
-│   ├── test_catalog.py        # Unit tests for provider.catalog
-│   └── test_mcp_client.py     # Unit tests for consumer.mcp_client
-├── Dockerfile.provider        # Multi-stage image: runs provider/app.py + provider/gateway.py
+│   ├── test_agent_executor.py # A2A executor end-to-end (catalog/quote/error)
+│   ├── test_catalog.py        # CATALOG rescale + make_quote
+│   ├── test_consumer_mcp.py   # Consumer MCP: wallet/sign/lock + A2A-bound (mocked)
+│   ├── test_provider_mcp.py   # Provider MCP: verify_credential / mint / swap (mocked)
+│   └── test_slot_pool.py      # SlotPool: reserve / release / lookup / expiry reclaim
+├── Dockerfile.provider        # Multi-stage image: runs provider/app.py only (gateway is gone)
 ├── Dockerfile.consumer        # Multi-stage image: runs consumer/app.py (and also ui.py via override)
-├── docker-compose.yml         # Orchestrates: anvil, deployer, ollama, provider-agent, consumer-agent, consumer-ui
-├── Makefile                   # Targets: up, down, down-clean, logs, contracts, demo
+├── docker-compose.yml         # Orchestrates: anvil, deployer, ollama, provider-agent, consumer-agent[, -2], consumer-ui
+├── Makefile                   # Targets: up, down, down-clean, logs, contracts, demo, clab-up, clab-down, demo-real
 ├── pyproject.toml             # uv project definition — all dependencies
 ├── uv.lock                    # Locked dependency graph
 ├── .env                       # Runtime secrets (gitignored in real use — committed here with test keys)
@@ -117,64 +136,72 @@ ollama-agent-simulation/
 
 ## 4. ARCHITECTURE & PATTERNS
 
-### Pattern: Microservices with LLM reasoning loop
+### Pattern: A2A inter-agent + per-agent MCP
 
-Four independent HTTP services communicate over the network. No shared in-process state except within each service.
+Three HTTP services (consumer :8001, provider :8002, anvil :8545) communicate over the network. Each agent runs its own in-process FastMCP server; the LLM and the inbound A2A executor only talk to their own MCP. Cross-agent calls always go over A2A.
 
 ```
 Browser
   │ POST /chat
   ▼
-consumer/ui.py :8501   (Streamlit — thin HTTP client, all logic delegated)
+consumer/ui.py :8501          (Streamlit — thin HTTP client)
   │ POST /chat
   ▼
-consumer/app.py :8001  (FastAPI — owns the LLM agentic loop)
+consumer/app.py :8001         (FastAPI — owns the LLM agentic loop)
   │
-  ├─ [MCP] get_provider_tools / call_provider_tool ──► provider/app.py :8002/mcp
-  │                                                     (FastMCP over HTTP)
+  ▼
+[in-memory] Client(consumer_mcp)
   │
-  ├─ [web3] requestAgreement() ─────────────────────► Anvil :8545
-  │                                                     (Ethereum chain)
-  │                 AgreementRequested event ◄──────── provider/app.py polls
-  │                 provider mints NFT, calls deposit()
-  │                 atomic swap: ETH→provider, NFT→consumer
+  ├─ wallet_address / sign_message / lock_payment / await_settlement   (local tools)
   │
-  └─ [httpx] GET /service ──────────────────────────► provider/gateway.py :8003
-               (signed nonce + tokenId)                ownerOf() on-chain check
+  └─ browse_catalog / request_quote / present_credential
+        │
+        └─ a2a-sdk message/send ──────────────────────► provider :8002/a2a
+                                                          DefaultRequestHandler
+                                                          → BandwidthProviderExecutor
+                                                          → [in-memory] Client(provider_mcp)
+                                                            ├─ get_catalog
+                                                            ├─ request_quote
+                                                            ├─ verify_credential_ownership
+                                                            ├─ allocate_bandwidth (SDN)
+                                                            ├─ mint_credential (web3)
+                                                            └─ complete_swap (web3)
+
+[web3] requestAgreement() ───────────────────────────► Anvil :8545
+                                                        (Ethereum chain)
+                AgreementRequested event ◄──────────── provider/app.py polls
+                provider reserves slot, mints NFT, deposits → atomic swap
 ```
 
 ### Key patterns in use
 
 **1. LLM Tool-calling loop (consumer/app.py `run_consumer`):**
-- System prompt + user message sent to Ollama with a combined tool list (MCP tools + local tools)
-- Loop runs ≤12 iterations: if `msg.tool_calls` is non-empty, dispatch each call and append `{"role":"tool"}` messages
-- MCP tools (`get_catalog`, `request_quote`) are dispatched via `call_provider_tool()` to the remote MCP server
-- Local tools (`execute_agreement`, `check_agreement_status`) are dispatched as plain Python function calls
-- Loop exits when no tool calls remain in the response, or at iteration 12 (returns a timeout message)
+- System prompt + user message sent to Ollama with `tools=` from `Client(consumer_mcp).list_tools()` — uniform set, no local/remote split.
+- Loop runs ≤12 iterations: if `msg.tool_calls` is non-empty, dispatch each call via `mcp_client.call_tool(name, args)` and append `{"role":"tool"}` messages.
+- A2A is hidden from the LLM. `browse_catalog`/`request_quote`/`present_credential` are MCP tool names that internally call `send_provider_action(provider_url, payload)`.
 
 **2. Atomic double-escrow (BandwidthEscrow.sol `deposit()`):**
 - Consumer calls `requestAgreement()` locking ETH → status = REQUESTED
 - Provider calls `deposit(agreementId, tokenId)` → checks-effects-interactions: status set to ACTIVE first, then `safeTransferFrom` NFT to escrow then to consumer, then `call{value}` ETH to provider. If ETH transfer fails, revert (entire atomic)
 - PENDING state exists in the paper's description but is never externally observable; the swap is atomic inside `deposit()`
 
-**3. File-locked inventory (provider/catalog.py):**
-- `inventory.txt` is a JSONL file with one row per tier
-- Every read/write uses `fcntl.LOCK_EX` (exclusive lock) to prevent race conditions when multiple agreements land simultaneously
-- Expired leases are pruned on every read via time comparison
+**3. SlotPool — file-locked (pe, subinterface, ce) slot reservations (shared/slot_pool.py):**
+- `inventory.txt` is JSONL with one row per tier; each row carries explicit per-slot bindings.
+- `reserve(tier, agreement_id, duration_seconds)` returns a `Slot(pe, subinterface, ce)` or `None` if full.
+- All reads/writes hold `fcntl.LOCK_EX`. Expired slots (`expiresAt < now`) are reclaimed on every read.
+- `provider/expiry.py` runs a 30-second background sweep that revokes the SDN policy for any expired slot before releasing it.
 
-**4. Signed nonce authentication (provider/gateway.py):**
-- Client sends `X-Nonce` (unix timestamp string) and `X-Signature` (ECDSA signature of nonce)
-- Gateway recovers signer with `Account.recover_message`, then calls `ownerOf(tokenId)` on-chain to verify the signer owns the NFT
-- Nonce is valid within a ±300s window (replay protection)
+**4. Signed-nonce credential verification (now an MCP tool):**
+- The provider's MCP `verify_credential_ownership(token_id, signature, nonce)` recovers the signer with `Account.recover_message`, calls `ownerOf(tokenId)` on chain, and confirms the NFT's agreement is `ACTIVE`.
+- Nonce window is ±300s. The standalone `provider/gateway.py:8003` is gone; the activation flow now invokes this tool from `BandwidthProviderExecutor._handle_activate`.
 
-**5. A2A Agent Cards:**
-- Both agents serve `/.well-known/agent.json` advertising name, description, skills, and MCP endpoint
-- Implemented as simple `GET` endpoints returning a hardcoded dict; no dynamic discovery
+**5. A2A Agent Cards (proto-based):**
+- `a2a-sdk` 1.0.x exposes `a2a.types.AgentCard` as a protobuf-generated class. Construct with snake_case kwargs; serialize with `google.protobuf.json_format.MessageToDict(card, preserving_proto_field_name=True)`.
+- Both agents serve `/.well-known/agent-card.json` (canonical) and `/.well-known/agent.json` (alias). Provider exposes 3 skills (`get_catalog`, `request_quote`, `activate`) at `/a2a` JSON-RPC.
 
 **6. MCP server mounted on FastAPI:**
-- `mcp.http_app()` creates a Starlette sub-application; mounted at root with `app.mount("/", _mcp_http_app)` after all REST routes
-- The MCP endpoint resolves to `/mcp` internally
-- **CRITICAL ORDERING:** REST routes are registered before the mount so Starlette's router checks them first. Reversing this order would shadow REST routes with the MCP catch-all. See comment in `provider/app.py:210`.
+- `mcp.http_app()` is a Starlette sub-application mounted at root **after** all REST routes and after the A2A routes (`create_agent_card_routes` + `create_jsonrpc_routes`).
+- Reversing the order would shadow REST/A2A with the MCP catch-all. The comment in `provider/app.py` near the mount call documents this.
 
 ---
 
@@ -182,9 +209,8 @@ consumer/app.py :8001  (FastAPI — owns the LLM agentic loop)
 
 | Entry point | Command | Port |
 |---|---|---|
-| Provider API | `uvicorn provider.app:app --port 8002` | 8002 |
-| Gateway | `uvicorn provider.gateway:app --port 8003` | 8003 |
-| Consumer API | `uvicorn consumer.app:app --port 8001` | 8001 |
+| Provider API + A2A + MCP | `uvicorn provider.app:app --port 8002` | 8002 |
+| Consumer API + MCP | `uvicorn consumer.app:app --port 8001` | 8001 |
 | Consumer UI | `streamlit run consumer/ui.py` | 8501 |
 
 ### Boot sequence — Provider (`provider/app.py`)
@@ -349,47 +375,53 @@ ChatResponse: { response: str, log: list[dict], thinking: list[str] }
 
 | Method | Path | Input | Output | Side effect |
 |---|---|---|---|---|
-| GET | `/.well-known/agent.json` | — | `AGENT_CARD` dict | none |
-| GET | `/catalog` | — | `list[CatalogEntry]` with `availableSlots` | reads+rewrites inventory.txt |
-| POST | `/quote` | `{packageId: str, consumerAddress: str}` | quote dict or 409 | adds to `pending_quotes` |
+| GET | `/.well-known/agent-card.json` | — | proto-derived AgentCard dict | none |
+| GET | `/.well-known/agent.json` | — | alias of `/agent-card.json` | none |
+| POST | `/a2a` | JSON-RPC `message/send` | JSON-RPC response (Task + artifact) | dispatches to `BandwidthProviderExecutor` |
+| GET | `/catalog` | — | `list[CatalogEntry]` with `availableSlots` | reads inventory via SlotPool |
+| POST | `/quote` | `{packageId, consumerAddress}` | quote dict or 409 | adds to `pending_quotes` |
 | GET | `/inventory` | — | same as `/catalog` | same |
 | GET | `/address` | — | `{"address": str}` | none |
-| `/mcp` | MCP HTTP transport | MCP protocol | MCP protocol | tool calls execute catalog/quote logic |
+| `/mcp` | MCP HTTP transport | MCP protocol | MCP protocol | mounted but used only in-memory by the executor; remote MCP is no longer the inter-agent path |
 
-**MCP tools (at `/mcp`):**
-- `get_catalog() -> str` — JSON array of catalog entries with availability
-- `request_quote(package_id: str, consumer_address: str) -> str` — JSON quote or `{"error": ...}`
+**A2A actions (parts[0].data.action):**
+- `get_catalog` → returns `{catalog: [...]}`
+- `request_quote` (`package_id`, `consumer_address`) → returns `{agreementId, priceWei, bandwidthMbps, durationSeconds}` (agreementId is stringified)
+- `activate` (`token_id`, `nonce`, `signature`) → returns `{status: "active"|"denied", bandwidth_mbps, seconds_remaining, endpoint, allocation, reason?}`
 
-### Gateway (:8003)
-
-| Method | Path | Input | Output |
-|---|---|---|---|
-| GET | `/service` | `?tokenId=N`, headers `X-Nonce`, `X-Signature` | gateway response dict or 400/401/403/404 |
+**Provider MCP tools (in-memory only):**
+- `get_catalog`, `request_quote`
+- `verify_credential_ownership(token_id, signature, nonce)`
+- `mint_credential(agreement_id, consumer_address, pe, subinterface, ce, mbps, duration_seconds)`
+- `complete_swap(agreement_id, token_id)`
+- `allocate_bandwidth(customer_id, pe, subinterface, mbps)` — honors `SDN_MOCK`
+- `revoke_bandwidth(customer_id, pe, subinterface)`
+- `verify_bandwidth(src_ce, dst_ce, expected_mbps, tolerance)`
 
 ### Consumer Agent (:8001)
 
 | Method | Path | Input | Output | Side effect |
 |---|---|---|---|---|
-| GET | `/.well-known/agent.json` | — | `AGENT_CARD` dict | none |
-| POST | `/chat` | `ChatRequest` | `ChatResponse` | runs LLM loop, executes on-chain txs, writes inter_agent_log |
+| GET | `/.well-known/agent-card.json` | — | proto-derived AgentCard dict | none |
+| GET | `/.well-known/agent.json` | — | alias | none |
+| POST | `/chat` | `ChatRequest` | `ChatResponse` | runs LLM loop over Client(consumer_mcp); on-chain txs via lock_payment; A2A round-trips inside browse/quote/present tools |
 | GET | `/log` | — | `list[dict]` | none |
 | DELETE | `/log` | — | `{"cleared": True}` | clears `inter_agent_log` |
-| GET | `/catalog_proxy` | — | `list[dict]` | calls provider MCP `get_catalog` |
-| GET | `/address` | — | `{"address": str}` | none |
-| GET | `/check_token` | `?tokenId=N` | gateway response dict | calls gateway `/service` with consumer's signature |
+| GET | `/catalog_proxy` | — | `list[dict]` | calls consumer MCP `browse_catalog(provider_url=PROVIDER_A2A_URLS[0])` |
+| GET | `/address` | — | `{"address": str}` | calls consumer MCP `wallet_address` |
 
-### LLM tool interfaces (consumer/app.py)
+### Consumer MCP tools
 
-**`execute_agreement(agreement_id: str) -> str`**
-- Reads `quote_cache[agreement_id]` for priceWei, mbps, duration
-- Calls `_get_provider_address()` (HTTP GET to provider `/address`)
-- Calls `escrow.functions.requestAgreement(aid, provider, mbps, duration)` with `value=priceWei`
-- Returns success string or error string
+Local (no network):
+- `wallet_address() -> str`
+- `sign_message(text) -> str` (hex)
+- `lock_payment(agreement_id) -> "OK <txHash>"|"ERROR ..."`
+- `await_settlement(agreement_id, max_attempts=8) -> "OK tokenId=N"|"PENDING"|"ERROR ..."`
 
-**`check_agreement_status(agreement_id: str) -> str`**
-- Calls `escrow.functions.getAgreement(aid).call()` for status
-- If ACTIVE: signs nonce, calls gateway `/service`, returns service details
-- If not ACTIVE: returns retry prompt
+A2A-bound (open a fresh `a2a-sdk` client per call, via `consumer/a2a_client.send_provider_action`):
+- `browse_catalog(provider_url) -> JSON catalog`
+- `request_quote(provider_url, package_id) -> JSON quote` (also caches `providerAddress` for `lock_payment`)
+- `present_credential(provider_url, token_id) -> JSON activate result`
 
 ### Smart contract interfaces
 
@@ -534,7 +566,7 @@ The `consumer-agent` service sets `OLLAMA_HOST=http://ollama:11434`. If you run 
 
 ## 11. KNOWN QUIRKS & CONSTRAINTS
 
-1. **`quote_cache` uses string keys, `pending_quotes` uses int keys.** The `agreementId` is a 128-bit random integer. JSON cannot round-trip a 128-bit int faithfully. `consumer/mcp_client.py:quote_cache` stores it as `str(agreementId)` to avoid precision loss. `provider/catalog.py:pending_quotes` uses raw `int`. When `execute_agreement` calls `int(agreement_id)` to parse the string back, this works — but if the ID were ≥2^53 and went through JavaScript JSON parsing it would corrupt. This is acceptable for local use but would need `BigInt` handling for a browser-native consumer.
+1. **`quote_cache` uses string keys, `pending_quotes` uses int keys.** The `agreementId` is a 128-bit random integer. JSON cannot round-trip a 128-bit int faithfully. `consumer/mcp_server.py:quote_cache` stores it as `str(agreementId)` to avoid precision loss. `provider/catalog.py:pending_quotes` uses raw `int`. When `lock_payment` calls `int(agreement_id)` to parse the string back, this works — but if the ID were ≥2^53 and went through JavaScript JSON parsing it would corrupt. This is acceptable for local use but would need `BigInt` handling for a browser-native consumer.
 
 2. **`_send_tx` compatibility shim.** `provider/app.py:69` and `consumer/app.py:96` both do `getattr(signed, "raw_transaction", None) or signed.rawTransaction`. This is because older web3.py versions use `rawTransaction`, newer use `raw_transaction`. Without this shim, the provider's `_send_tx` raises `AttributeError` on some dependency versions.
 
@@ -542,7 +574,7 @@ The `consumer-agent` service sets `OLLAMA_HOST=http://ollama:11434`. If you run 
 
 4. **FastMCP lifespan is nested inside FastAPI lifespan.** `provider/app.py:168-171` wraps the FastMCP app's lifespan context manager (`async with _mcp_http_app.lifespan(app):`). This is mandatory — FastMCP requires its lifespan to run for the transport to initialize. Removing this nesting breaks MCP. The event listener task is created inside the same lifespan context.
 
-5. **MCP client opens a new connection per call.** `consumer/mcp_client.py` opens and closes an `async with Client(PROVIDER_MCP_URL) as client:` for every `get_provider_tools()` and `call_provider_tool()` invocation. This is correct but adds ~1 round-trip of latency per tool call. For a purchase flow (2 MCP calls), this is acceptable but would be a bottleneck if tools were called many times.
+5. **A2A client opens a new connection per call.** `consumer/a2a_client.send_provider_action` opens an `httpx.AsyncClient` and resolves the agent card every call — about one extra HTTP round-trip per `browse_catalog`/`request_quote`/`present_credential`. Acceptable for a purchase flow (≤3 A2A calls); would be a bottleneck if the LLM looped on these. The consumer's own MCP, by contrast, runs in-memory via `Client(consumer_mcp)`.
 
 6. **Inventory is file-backed, not database-backed.** `provider/inventory.txt` is written by `catalog.py` with `fcntl.LOCK_EX`. This works in a single-container deployment but breaks if provider is horizontally scaled (multiple processes writing the same file would race even with fcntl). The file is Docker volume-mounted for persistence; losing the mount loses all slot state.
 
@@ -550,7 +582,7 @@ The `consumer-agent` service sets `OLLAMA_HOST=http://ollama:11434`. If you run 
 
 8. **NFT mint-before-approve-before-deposit is a three-step sequence.** If the provider crashes after minting but before `deposit()`, the NFT is orphaned (minted but not in escrow). `provider/app.py:161` logs this case explicitly ("NFT tokenId=X is orphaned"). No on-chain recovery mechanism exists.
 
-9. **The `endpoint` field in NFT metadata is hardcoded.** `provider/app.py:143` always mints with `"grpc://provider:8003"` as the endpoint. This is a Docker container name, meaningless outside Docker. For local dev, the endpoint value in the NFT is wrong (gateway runs at `localhost:8003`), but the gateway is found via `GATEWAY_BASE_URL` env var, not the NFT endpoint.
+9. **The `endpoint` field in NFT metadata encodes the slot.** `provider/mcp_server.py:mint_credential` writes `clab://{pe}/{subinterface}` so the credential is bound to a specific physical resource. The string is informational on chain; the activate path uses the `slot_pool.lookup(agreement_id)` mapping to resolve the actual `(pe, subinterface, ce)` to configure.
 
 10. **`_extract_token_id` is fragile.** `provider/app.py:77-81` parses the Transfer event log by matching the event signature hash and reading `topics[3]`. This assumes ERC-721's `Transfer(from, to, tokenId)` where the 4th topic is the tokenId. If OpenZeppelin changes their event encoding, this breaks silently. A safer approach would use the web3.py event decoder.
 

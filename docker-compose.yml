@@ -112,6 +112,31 @@ services:
     volumes:
       - ./contracts/deployments:/app/contracts/deployments:ro
 
+  consumer-agent-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.consumer
+    depends_on:
+      provider-agent:
+        condition: service_started
+      ollama-pull-4b:
+        condition: service_completed_successfully
+      ollama-pull-1.7b:
+        condition: service_completed_successfully
+    ports:
+      - "8011:8001"
+    environment:
+      - RPC_URL=http://anvil:8545
+      - CONSUMER_PRIVATE_KEY=${CONSUMER_PRIVATE_KEY_2}
+      - PROVIDER_A2A_URLS=http://provider-agent:8002
+      - PROVIDER_AGENT_CARD_URL=http://provider-agent:8002/.well-known/agent-card.json
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:4b}
+      - OLLAMA_HOST=http://ollama:11434
+    volumes:
+      - ./contracts/deployments:/app/contracts/deployments:ro
+    profiles:
+      - multi-consumer
+
   consumer-ui:
     build:
       context: .

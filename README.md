@@ -167,6 +167,18 @@ make demo
 
 This runs a full purchase flow via `curl` and prints the output at each step.
 
+### Two consumers in parallel
+
+```bash
+docker compose --profile multi-consumer up -d
+# Consumer 1 reachable at http://localhost:8001/chat
+# Consumer 2 reachable at http://localhost:8011/chat
+```
+
+The two consumers use different EOAs (account[2] and account[3]) and bind
+different slots. Try ordering different tiers from each at the same time
+to verify the slot pool's `fcntl`-based concurrency is sound.
+
 ---
 
 ## Running the demo with real SDN enforcement
