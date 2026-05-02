@@ -25,6 +25,7 @@ from web3 import Web3
 
 from provider.agent_card import build_provider_agent_card
 from provider.agent_executor import BandwidthProviderExecutor
+from provider.expiry import expiry_sweep_loop
 from provider.catalog import (
     CATALOG_BY_ID,
     cleanup_quotes,
@@ -134,6 +135,7 @@ _mcp_http_app = mcp.http_app()
 async def lifespan(app: FastAPI):
     async with _mcp_http_app.lifespan(app):
         asyncio.create_task(_event_listener())
+        asyncio.create_task(expiry_sweep_loop(period_seconds=30))
         yield
 
 

@@ -26,6 +26,11 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 COPY --from=builder /app/.venv /app/.venv
 
+# docker CLI for the SDN tools (allocate_bandwidth docker-execs into CE containers)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends docker.io iproute2 iputils-ping \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY provider/ ./provider/
 COPY shared/ ./shared/
 

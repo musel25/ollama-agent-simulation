@@ -83,6 +83,9 @@ services:
     volumes:
       - ./contracts/deployments:/app/contracts/deployments:ro
       - ./provider/inventory.txt:/app/provider/inventory.txt
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   consumer-agent:
     build:

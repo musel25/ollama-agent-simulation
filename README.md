@@ -169,6 +169,46 @@ This runs a full purchase flow via `curl` and prints the output at each step.
 
 ---
 
+## Running the demo with real SDN enforcement
+
+The default `make demo` runs with `SDN_MOCK=true` — `allocate_bandwidth`
+returns success without touching any network device.
+
+To run the demo against ContainerLab + Nokia SR Linux + Linux `tc`:
+
+1. Deploy ContainerLab (one-time per session, requires sudo):
+   ```bash
+   make clab-up      # runs ../srl-gnmi-bandwidth-poc/scripts/deploy.sh + push-config.sh
+   ```
+
+2. Run the demo with SDN enforcement enabled:
+   ```bash
+   make demo-real
+   ```
+
+3. Tear down:
+   ```bash
+   make clab-down
+   make down
+   ```
+
+ContainerLab's 7-node topology and the slot mapping:
+
+| Tier   | Mbps | PE  | Subinterface     | CE  |
+|--------|------|-----|------------------|-----|
+| small  | 2    | pe1 | ethernet-1/2.0   | ce1 |
+| medium | 5    | pe1 | ethernet-1/3.0   | ce3 |
+| large  | 8    | pe2 | ethernet-1/2.0   | ce2 |
+
+After a `medium` purchase you can verify the rate is shaped:
+```bash
+docker exec clab-bandwidth-poc-ce4 iperf3 -s -1 -p 5201 -J &
+docker exec clab-bandwidth-poc-ce3 iperf3 -c 192.168.4.10 -p 5201 -t 5 -u -b 15M -J
+```
+Expected: receiver `bits_per_second ≈ 5.0e6`.
+
+---
+
 ## Project Structure
 
 ```
