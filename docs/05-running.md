@@ -111,15 +111,23 @@ Anvil session the `.env.example` defaults are Anvil's well-known prefunded
 accounts (`mnemonic: "test test … junk"`), so you can leave them unchanged.
 
 If you switch to a different chain or a custom mnemonic, you must update all
-five:
+of them:
 
 | Variable | Role |
 |---|---|
 | `DEPLOYER_PRIVATE_KEY` | Signs the `forge script` deployment transaction |
+| `DEPLOYER_ADDRESS` | Ethereum address derived from `DEPLOYER_PRIVATE_KEY` |
 | `PROVIDER_PRIVATE_KEY` | Signs provider-side on-chain calls (NFT mint, deposit) |
-| `PROVIDER_ADDRESS` | Ethereum address of the provider EOA (used in the escrow contract) |
+| `PROVIDER_ADDRESS` | Ethereum address derived from `PROVIDER_PRIVATE_KEY` (used in the escrow contract) |
 | `CONSUMER_PRIVATE_KEY` | Signs consumer-side on-chain calls (requestAgreement) |
+| `CONSUMER_ADDRESS` | Ethereum address derived from `CONSUMER_PRIVATE_KEY` |
 | `CONSUMER_PRIVATE_KEY_2` | Second consumer EOA — only needed for multi-consumer mode |
+| `CONSUMER_ADDRESS_2` | Ethereum address derived from `CONSUMER_PRIVATE_KEY_2` |
+
+Each `*_PRIVATE_KEY` has a corresponding `*_ADDRESS` that **must stay in
+sync**. The `.env.example` defaults already pair them correctly for the
+standard Anvil prefunded accounts, so no action is needed unless you replace
+the keys.
 
 Do not commit a `.env` that contains real private keys.
 
@@ -142,6 +150,11 @@ pointing at a different host.
 The `.env.example` uses `http://localhost:*` values. The Docker Compose
 `environment:` blocks override these with container-network hostnames at
 runtime, so the file values only matter for bare-metal.
+
+> **Note:** `OLLAMA_HOST` and `PROVIDER_AGENT_CARD_URL` are injected
+> automatically by `docker-compose.yml` and do **not** need to be set in
+> `.env` for Docker-based runs. For bare-metal (terminal mode), set them
+> manually if your host or port differs from the defaults above.
 
 ---
 
@@ -374,7 +387,7 @@ repository cloned as a sibling of this repo:
 ../srl-gnmi-bandwidth-poc/
 ```
 
-**Step 2 — Deploy ContainerLab** (one-time per session, requires `sudo`):
+**Step 2 — Deploy ContainerLab** (one-time per session; may require `sudo` — ContainerLab usually does):
 
 ```bash
 make clab-up
