@@ -33,7 +33,7 @@ This is a research prototype accompanying an academic paper.
 | Streamlit | ≥1.56.0 | Chat UI at :8501 |
 | web3.py | ≥6.0,<7 | Ethereum JSON-RPC client; signs and sends transactions |
 | eth-account | ≥0.11.3 | Key management, signing, signature recovery |
-| httpx | ≥0.28.1 | Sync/async HTTP client (UI→consumer, consumer→gateway) |
+| httpx | ≥0.28.1 | Sync/async HTTP client (UI→consumer, consumer→provider via A2A) |
 | Pydantic | (bundled with FastAPI) | Request/response validation |
 | Solidity | ^0.8.20 | Smart contract language |
 | Foundry (forge, anvil) | latest | EVM toolchain; Anvil runs the local chain at :8545 |
@@ -91,7 +91,7 @@ ollama-agent-simulation/
 │   ├── test_consumer_mcp.py   # Consumer MCP: wallet/sign/lock + A2A-bound (mocked)
 │   ├── test_provider_mcp.py   # Provider MCP: verify_credential / mint / swap (mocked)
 │   └── test_slot_pool.py      # SlotPool: reserve / release / lookup / expiry reclaim
-├── Dockerfile.provider        # Multi-stage image: runs provider/app.py only (gateway is gone)
+├── Dockerfile.provider        # Multi-stage image: runs provider/app.py only
 ├── Dockerfile.consumer        # Multi-stage image: runs consumer/app.py (and also ui.py via override)
 ├── docker-compose.yml         # Orchestrates: anvil, deployer, ollama, provider-agent, consumer-agent[, -2], consumer-ui
 ├── Makefile                   # Targets: up, down, down-clean, logs, contracts, demo, clab-up, clab-down, demo-real
@@ -114,7 +114,10 @@ ollama-agent-simulation/
 | `provider/catalog.py` | `CATALOG`, `CATALOG_BY_ID`, `pending_quotes`, `get_catalog_with_availability`, `make_quote`, `decrement_inventory`, `rewind_inventory`, `cleanup_quotes` | `provider/app.py`, `provider/mcp_server.py` |
 | `provider/mcp_server.py` | `mcp` (FastMCP instance with tools `get_catalog`, `request_quote`) | `provider/app.py` |
 | `provider/app.py` | FastAPI `app`; endpoints: `/.well-known/agent.json`, `/catalog`, `/quote`, `/inventory`, `/address`, `/mcp` | Entry point via uvicorn |
-| `consumer/mcp_client.py` | `get_provider_tools()`, `call_provider_tool()`, `mcp_tool_to_ollama()`, `quote_cache` | `consumer/app.py` |
+| `consumer/mcp_server.py` | `mcp` (FastMCP instance with tools `wallet_address`, `sign_message`, `lock_payment`, `await_settlement`, `browse_catalog`, `request_quote`, `present_credential`), `quote_cache` | `consumer/app.py`, `consumer/graph.py` |
+| `consumer/graph.py` | `build_graph()` — LangGraph state machine nodes for the six-stage workflow | `consumer/app.py` |
+| `consumer/a2a_client.py` | `send_provider_action(url, payload)` — single A2A round-trip to provider | `consumer/mcp_server.py` |
+| `consumer/agent_card.py` | `build_consumer_agent_card()` — returns `a2a.types.AgentCard` for the consumer | `consumer/app.py` |
 | `consumer/app.py` | FastAPI `app`; endpoints: `/.well-known/agent.json`, `/chat`, `/log`, `/address`, `/catalog_proxy`, `/check_token` | Entry point via uvicorn; called by `consumer/ui.py` |
 | `consumer/ui.py` | Streamlit app; calls `consumer/app.py` over HTTP | Standalone — run with `streamlit run` |
 | `shared/contracts.py` | `get_nft_contract(w3)`, `get_escrow_contract(w3)` | `provider/app.py`, `provider/mcp_server.py`, `consumer/app.py` |
@@ -166,10 +169,10 @@ consumer/app.py :8001         (FastAPI — owns the LLM agentic loop)
 
 ### Key patterns in use
 
-**1. LLM Tool-calling loop (consumer/app.py `run_consumer`):**
-- System prompt + user message sent to Ollama with `tools=` from `Client(consumer_mcp).list_tools()` — uniform set, no local/remote split.
-- Loop runs ≤12 iterations: if `msg.tool_calls` is non-empty, dispatch each call via `mcp_client.call_tool(name, args)` and append `{"role":"tool"}` messages.
-- A2A is hidden from the LLM. `browse_catalog`/`request_quote`/`present_credential` are MCP tool names that internally call `send_provider_action(provider_url, payload)`.
+**1. LLM Tool-calling loop (consumer/app.py + consumer/graph.py):**
+- The workflow is a LangGraph state machine built by `build_graph()`. The LLM is consulted at `pick_tier_node` (which tier?) and `summary_node` (one-sentence reply); all on-chain and A2A calls are deterministic Python.
+- `consumer/app.py` opens an in-process `MCPClient(consumer_mcp)` session (using `from fastmcp import Client as MCPClient`) to get tool schemas and call tools.
+- A2A is hidden from the LLM. `browse_catalog`/`request_quote`/`present_credential` are MCP tool names in `consumer/mcp_server.py` that internally call `send_provider_action(provider_url, payload)`.
 
 **2. Atomic double-escrow (BandwidthEscrow.sol `deposit()`):**
 - Consumer calls `requestAgreement()` locking ETH → status = REQUESTED
@@ -303,7 +306,7 @@ Quote TTL is 60 seconds. Cleanup happens inside `_handle_agreement()` before pro
 }
 ```
 
-`consumer/mcp_client.py:quote_cache` is `dict[str, dict]` — keyed by `str(agreementId)` because JSON loses int precision for 128-bit integers.
+`consumer/mcp_server.py:quote_cache` is `dict[str, dict]` — keyed by `str(agreementId)` because JSON loses int precision for 128-bit integers.
 
 ### Python: Inventory row (`provider/inventory.txt`, JSONL)
 
@@ -430,7 +433,7 @@ A2A-bound (open a fresh `a2a-sdk` client per call, via `consumer/a2a_client.send
 
 | State | Location | Type | Lifetime |
 |---|---|---|---|
-| Quote cache | `consumer/mcp_client.py:quote_cache` | `dict[str, dict]` in-memory | Process lifetime; populated by `call_provider_tool("request_quote", ...)` |
+| Quote cache | `consumer/mcp_server.py:quote_cache` | `dict[str, dict]` in-memory | Process lifetime; populated by `request_quote` MCP tool on successful A2A round-trip |
 | Inter-agent log | `consumer/app.py:inter_agent_log` | `list[dict]` in-memory | Cleared at each `run_consumer()` call |
 | LLM message history | Local var in `run_consumer()` | `list[dict]` | Per-request; discarded after response |
 
@@ -471,13 +474,21 @@ Streamlit state is client-session-scoped and does not persist across page reload
 - `provider.catalog`, `provider.mcp_server`, `shared.a2a_messages`
 
 **`consumer/app.py`** imports from:
-- `consumer.mcp_client` (`call_provider_tool`, `get_provider_tools`, `mcp_tool_to_ollama`, `quote_cache`)
-- `shared.contracts`
-- `web3`, `eth_account`, `ollama`, `httpx`, `fastapi`
+- `consumer.mcp_server` (`mcp as consumer_mcp`)
+- `consumer.graph` (`build_graph`)
+- `consumer.agent_card` (`build_consumer_agent_card`)
+- `fastmcp` (`Client as MCPClient`)
+- `web3`, `eth_account`, `fastapi`, `uvicorn`
 
-**`consumer/mcp_client.py`** imports from:
-- `fastmcp` (`Client`)
+**`consumer/mcp_server.py`** imports from:
+- `fastmcp` (`FastMCP`, `Context`)
+- `consumer.a2a_client` (`send_provider_action`)
+- `web3`, `eth_account`, `shared.contracts`
 - stdlib only (`json`, `os`, `typing`)
+
+**`consumer/graph.py`** imports from:
+- `consumer.mcp_server` (tool functions and `quote_cache`)
+- `langgraph`, `ollama`, `fastmcp` (`Client as MCPClient`)
 
 **`consumer/ui.py`** imports from:
 - `httpx`, `streamlit`, `web3` (only for `Web3.from_wei`)
@@ -503,12 +514,11 @@ Streamlit state is client-session-scoped and does not persist across page reload
 | Variable | Required | Default | What it controls | Breaks if missing/wrong |
 |---|---|---|---|---|
 | `PROVIDER_PRIVATE_KEY` | YES | — | Provider EOA key; used to sign all provider txs and is the NFT contract owner | provider/app.py raises `KeyError` on startup |
-| `CONSUMER_PRIVATE_KEY` | YES | — | Consumer EOA key; used to sign consumer txs and gateway nonces | consumer/app.py raises `KeyError` on startup |
+| `CONSUMER_PRIVATE_KEY` | YES | — | Consumer EOA key; used to sign consumer chain transactions and credential nonces | consumer/app.py raises `KeyError` on startup |
 | `DEPLOYER_PRIVATE_KEY` | YES (deploy only) | — | Used by `Deploy.s.sol` to deploy contracts | Deploy script fails |
 | `PROVIDER_ADDRESS` | YES (deploy only) | — | Passed to `BandwidthNFT` constructor as initial Ownable owner | NFT minting will revert if wrong |
 | `RPC_URL` | No | `http://localhost:8545` | Ethereum JSON-RPC endpoint for all services | All on-chain calls fail silently |
 | `PROVIDER_BASE_URL` | No | `http://localhost:8002` | Consumer → provider REST base URL (for `/address` call) | `execute_agreement` fails |
-| `GATEWAY_BASE_URL` | No | `http://localhost:8003` | Consumer → gateway base URL | `check_agreement_status` fails |
 | `PROVIDER_MCP_URL` | No | `http://localhost:8002/mcp` | MCP endpoint for consumer's FastMCP client | LLM has no provider tools; purchases impossible |
 | `CONSUMER_BASE_URL` | No | `http://localhost:8001` | UI → consumer agent base URL | UI cannot reach backend |
 | `OLLAMA_MODEL` | No | `qwen3:4b` | Default LLM model name | Falls back to `qwen3:4b`; fails if model not pulled |
@@ -532,9 +542,8 @@ Streamlit state is client-session-scoped and does not persist across page reload
 
 In Docker Compose, all services communicate by container name:
 - `http://anvil:8545` — blockchain
-- `http://provider-agent:8002` — provider REST + MCP
-- `http://provider-agent:8003` — gateway
-- `http://consumer-agent:8001` — consumer
+- `http://provider-agent:8002` — provider REST + A2A + MCP
+- `http://consumer-agent:8001` — consumer REST + MCP
 - `http://ollama:11434` — LLM inference
 
 The `consumer-agent` service sets `OLLAMA_HOST=http://ollama:11434`. If you run locally without Docker, Ollama must be running on localhost:11434 (its default).
@@ -577,7 +586,7 @@ The `consumer-agent` service sets `OLLAMA_HOST=http://ollama:11434`. If you run 
 |---|---|---|
 | `provider/app.py` | MCP lifespan nesting; mount ordering; event listener task; `_send_tx` compat shim | MCP tools still discoverable at `/mcp`; provider REST routes still respond; AgreementRequested events still handled |
 | `provider/catalog.py` | File locking logic; quote TTL; inventory slot math | Run `tests/test_catalog.py`; verify slot counts decrement and rewind correctly |
-| `consumer/app.py` | LLM loop iteration limit; tool dispatch routing (MCP vs. local); quote_cache key type | Full end-to-end purchase still completes; `check_agreement_status` still signs nonce correctly |
+| `consumer/app.py` | LangGraph graph construction; MCPClient session lifecycle; inter_agent_log clearing | Full end-to-end purchase still completes; inter-agent log still populated correctly |
 | `shared/contracts.py` | Single source for contract addresses and ABIs; all services depend on it | Any change here breaks all three services simultaneously |
 | `contracts/src/BandwidthEscrow.sol` | ABI changes require regenerating `shared/abi/BandwidthEscrow.json` and redeploying | After Solidity change: `forge build`, copy ABI, redeploy, update `local.json` |
 | `contracts/src/BandwidthNFT.sol` | Same as above; also: changing `TokenMetadata` struct fields breaks `_extract_token_id` and MCP tool tuple unpacking | Same as above, plus verify `provider/mcp_server.py:135` tuple unpack matches new struct order |
@@ -586,7 +595,7 @@ The `consumer-agent` service sets `OLLAMA_HOST=http://ollama:11434`. If you run 
 
 - `BandwidthEscrow.sol getAgreement()` tuple order ↔ `consumer/app.py:agreement[N]` index accesses (indices 2,3,4,6,7 are used)
 - `BandwidthNFT.sol TokenMetadata` struct field order ↔ `provider/mcp_server.py:135` destructuring (`agreement_id, mbps, duration, start_time, endpoint = meta`)
-- `provider/catalog.py make_quote()` return keys ↔ `consumer/mcp_client.py call_provider_tool()` cache population (checks for `"agreementId"` key)
+- `provider/catalog.py make_quote()` return keys ↔ `consumer/mcp_server.py request_quote()` cache population (checks for `"agreementId"` key)
 - `provider/mcp_server.py request_quote()` → changes to parameter names change the MCP tool's `inputSchema` → must update consumer's system prompt tool description
 - `provider/inventory.txt` schema (JSONL field names) ↔ `provider/catalog.py` `_read_inventory_locked()` / `_write_inventory_locked()`
 
