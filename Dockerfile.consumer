@@ -16,7 +16,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen
 
 FROM python:${PYTHON_VERSION}-slim
 WORKDIR /app
@@ -28,6 +28,7 @@ COPY --from=builder /app/.venv /app/.venv
 
 COPY consumer/ ./consumer/
 COPY shared/ ./shared/
+COPY tests/ ./tests/
 
 RUN mkdir -p contracts/deployments
 
