@@ -89,8 +89,11 @@ to fail with "no cached quote".
 **What you must check after editing.**
 
 - Run `uv run pytest tests/test_consumer_mcp.py tests/test_provider_mcp.py -v`.
-- Open `:8002/mcp/list_tools` (or `:8001/mcp/list_tools` for the consumer) in a browser after
-  restarting the service and confirm the new or renamed tool appears.
+- For **consumer** changes: re-run `tests/test_consumer_graph.py` — the LangGraph nodes import
+  consumer MCP tools directly, so a missing tool surfaces as a Python `ImportError` or
+  `AttributeError` there. For **provider** changes: run `make demo` end-to-end and confirm the
+  catalog/quote/activate paths still work; a removed provider tool surfaces as an MCP
+  `tools/call` error from the consumer.
 - Keep tool docstrings short and specific — one sentence that tells the LLM *what* the tool
   does, not *how* it is implemented.
 
@@ -210,7 +213,8 @@ FastAPI object. Renaming either the module or the `app` variable breaks the cont
 | Solidity in `contracts/src/*.sol` | `cd contracts && forge build && forge test`; `make down-clean && make up`; `make demo` | New ABI in `shared/abi/*.json` matches; demo completes end-to-end |
 | `provider/agent_executor.py` | `uv run pytest tests/test_agent_executor.py -v` | `make demo` (full path including activation) |
 | `shared/slot_pool.py` | `uv run pytest tests/test_slot_pool.py -v` | `make demo` twice — second run should not double-book the same slot |
-| `consumer/mcp_server.py` or `provider/mcp_server.py` | `uv run pytest tests/test_consumer_mcp.py tests/test_provider_mcp.py -v` | Open `:8002/mcp/list_tools` and confirm the new tool surfaces |
+| `consumer/mcp_server.py` | `uv run pytest tests/test_consumer_mcp.py tests/test_consumer_graph.py -v` | `make demo` (the LangGraph nodes import these tools directly; a missing tool fails on graph import) |
+| `provider/mcp_server.py` | `uv run pytest tests/test_provider_mcp.py -v` | `make demo` end-to-end; a removed tool surfaces as an MCP `tools/call` error from the consumer |
 | `consumer/graph.py` | `uv run pytest tests/test_consumer_graph.py -v` | `make demo` |
 | `provider/catalog.py` or `provider/inventory.txt` | `uv run pytest tests/test_catalog.py tests/test_slot_pool.py -v` | `make demo` |
 | LLM system prompt only | nothing automated | `make demo`, then eyeball the consumer's tier choice in the logs |
