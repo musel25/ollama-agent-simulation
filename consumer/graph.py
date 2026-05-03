@@ -187,3 +187,38 @@ async def lock_node(state: WorkflowState) -> dict:
         "message": f"requestAgreement() sent. tx={tx_hash}",
     })
     return {"log": state["log"], "tx_hash": tx_hash}
+
+
+_SETTLE_MAX_ATTEMPTS = 3
+
+
+async def settle_node(state: WorkflowState) -> dict:
+    args = {"agreement_id": state["agreement_id"]}
+    _log_call(state, "await_settlement", args)
+    raw = await asyncio.to_thread(_await_settlement_tool, state["agreement_id"])
+    _log_result(state, "consumer", raw)
+
+    attempts = state.get("settle_attempts", 0) + 1
+    if raw == "PENDING":
+        return {"log": state["log"], "settle_attempts": attempts}
+    if raw.startswith("ERROR"):
+        return {"log": state["log"], "settle_attempts": attempts, "error": raw}
+    if raw.startswith("OK tokenId="):
+        token_id = int(raw.removeprefix("OK tokenId=").strip())
+        state["log"].append({
+            "from": "consumer",
+            "message": f"Agreement ACTIVE. tokenId={token_id}",
+        })
+        return {"log": state["log"], "settle_attempts": attempts, "token_id": token_id}
+    return {"log": state["log"], "settle_attempts": attempts,
+            "error": f"unexpected settlement response: {raw}"}
+
+
+def _settle_route(state: WorkflowState) -> str:
+    if state.get("error"):
+        return "error_node"
+    if "token_id" in state:
+        return "present_node"
+    if state.get("settle_attempts", 0) >= _SETTLE_MAX_ATTEMPTS:
+        return "error_node"
+    return "settle_node"

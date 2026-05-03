@@ -136,3 +136,35 @@ async def test_lock_node_propagates_error(monkeypatch):
 
     out = await g.lock_node({"agreement_id": "12345", "log": []})
     assert "insufficient funds" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_settle_node_active(monkeypatch):
+    def fake_settle(agreement_id):
+        return "OK tokenId=42"
+    monkeypatch.setattr(g, "_await_settlement_tool", fake_settle)
+
+    out = await g.settle_node({"agreement_id": "12345", "log": [], "settle_attempts": 0})
+    assert out["token_id"] == 42
+    assert any("Agreement ACTIVE." in e["message"] for e in out["log"])
+
+
+@pytest.mark.asyncio
+async def test_settle_node_pending_increments_counter(monkeypatch):
+    def fake_settle(agreement_id):
+        return "PENDING"
+    monkeypatch.setattr(g, "_await_settlement_tool", fake_settle)
+
+    out = await g.settle_node({"agreement_id": "12345", "log": [], "settle_attempts": 0})
+    assert "token_id" not in out
+    assert out["settle_attempts"] == 1
+    assert "error" not in out
+
+
+@pytest.mark.asyncio
+async def test_settle_should_retry_routing():
+    assert g._settle_route({"settle_attempts": 0}) == "settle_node"
+    assert g._settle_route({"settle_attempts": 2}) == "settle_node"
+    assert g._settle_route({"settle_attempts": 3}) == "error_node"
+    assert g._settle_route({"token_id": 7, "settle_attempts": 1}) == "present_node"
+    assert g._settle_route({"error": "boom"}) == "error_node"
