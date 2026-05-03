@@ -105,7 +105,7 @@ When your Python code needs to call another service over the network, you need a
 
 A container is like a lightweight virtual machine. It bundles your code, the Python interpreter, all libraries, and OS-level tools into one image that runs identically on any machine. Docker builds images from `Dockerfile` instructions. Docker Compose lets you declare multiple services (consumer, provider, blockchain node, LLM server) in a single `docker-compose.yml` file and start them all with one command.
 
-**In this project:** `docker-compose.yml` at the repo root defines six services: `anvil` (blockchain), `deployer` (one-shot contract deployment), `ollama` (LLM server), `provider-agent`, `consumer-agent`, and `consumer-ui`. `Dockerfile.consumer` and `Dockerfile.provider` define the images. Use `make up` to build and start everything, `make down` to stop.
+**In this project:** `docker-compose.yml` at the repo root defines eight services: `anvil` (blockchain), `deployer` (one-shot contract deployment), `ollama` (LLM server), `ollama-pull-4b`, `ollama-pull-1.7b`, `provider-agent`, `consumer-agent`, and `consumer-ui`. The `ollama-pull-*` services are one-shot — they exit after pulling the model. A ninth service, `consumer-agent-2`, is profile-gated (`profiles: [multi-consumer]`) and does not start with `make up`. `Dockerfile.consumer` and `Dockerfile.provider` define the images. Use `make up` to build and start everything, `make down` to stop.
 
 ---
 
@@ -167,7 +167,7 @@ Modern LLMs can do more than generate text — they can call functions. You send
 
 Tool calling is what makes an LLM an agent rather than just a chatbot. Without tools the model can only produce text; with tools it can execute code, read files, call APIs, send transactions, and observe the results.
 
-**In this project:** the consumer's MCP server (`consumer/mcp_server.py`) defines the tools the LLM can invoke — `browse_catalog`, `request_quote`, `present_credential`, `lock_payment`, `await_settlement`, `wallet_address`, and `sign_message`. These are discovered and called via the FastMCP in-memory client in the LangGraph nodes.
+**In this project:** the consumer's MCP server (`consumer/mcp_server.py`) defines the tools the LLM can invoke — `browse_catalog`, `request_quote`, `present_credential`, `lock_payment`, `await_settlement`, `wallet_address`, and `sign_message`. The LangGraph nodes in `consumer/graph.py` import these tool functions directly from `consumer/mcp_server.py` and call them as plain async coroutines — there is no MCP round-trip inside the graph. An in-memory `MCPClient` is instantiated separately in `consumer/app.py` and used for the `/catalog_proxy` and `/address` REST endpoints, demonstrating both invocation styles.
 
 ---
 
@@ -213,7 +213,7 @@ MCP defines how an LLM host discovers available tools, what schema each tool exp
 
 MCP separates the AI model from the tools it uses. The model does not need to know how a tool works; it just knows the tool's name, description, and parameters. This means you can swap the LLM or add new tools independently. MCP servers can run in-process (in-memory), over standard I/O, or over HTTP — this project uses HTTP mounting and in-memory access.
 
-**In this project:** both agents run FastMCP servers — `consumer/mcp_server.py` and `provider/mcp_server.py`. The consumer's tools are available at the `/mcp` sub-path of `:8001`; the provider's at `/mcp` on `:8002`. Inside each agent, the MCP server is used in-memory (via `Client(mcp)`) rather than over the network, which avoids a round trip.
+**In this project:** both agents run FastMCP servers — `consumer/mcp_server.py` and `provider/mcp_server.py`. The consumer's MCP server runs entirely in-process and is never exposed over HTTP — `consumer/app.py` has no `app.mount()` call for it, and the LangGraph nodes in `consumer/graph.py` import the tool functions directly and call them as coroutines. The provider's MCP server is exposed over HTTP: `provider/app.py` calls `app.mount("/", _mcp_http_app)`, making the MCP endpoints reachable at `/mcp` on `:8002` (handled by FastMCP's own HTTP app). The consumer also instantiates an in-memory `MCPClient` in `consumer/app.py`, but only for the `/catalog_proxy` and `/address` REST endpoints — not inside the LangGraph flow.
 
 ---
 
@@ -354,7 +354,7 @@ Ethereum smart contracts can emit "events" — named records with typed fields �
 
 Events have "indexed" fields (up to 3) that can be filtered efficiently, and non-indexed fields stored in the log data. In `BandwidthEscrow.sol`, `agreementId`, `consumer`, and `provider` are indexed — this lets the provider filter `AgreementRequested` events to only ones that name it as the provider.
 
-**In this project:** `BandwidthEscrow.sol` emits `AgreementRequested(agreementId, consumer, provider, mbps, duration, priceWei)` when the consumer calls `requestAgreement`. The provider's background loop in `provider/app.py` polls for this event. When it sees one, it mints the NFT, approves the escrow, and calls `deposit()`. `provider/expiry.py` also uses the `AgreementRequested` event indirectly via the slot pool.
+**In this project:** `BandwidthEscrow.sol` emits `AgreementRequested(agreementId, consumer, provider, mbps, duration, priceWei)` when the consumer calls `requestAgreement`. The provider's background loop in `provider/app.py` polls for this event. When it sees one, it mints the NFT, approves the escrow, and calls `deposit()`. `provider/expiry.py` is a separate background task that sweeps expired slots based on `start_time + duration` — it does not consume chain events.
 
 ---
 
@@ -588,7 +588,7 @@ In software, state machines reduce bugs by eliminating implicit "invalid state" 
 
 Already described in §6.3. Values: `NONE(0) → REQUESTED(1) → ACTIVE(2)`; also `CANCELLED(4)` if aborted. Enforced by the Solidity contract — no code can skip steps or go backward.
 
-**State machine 2: SlotPool (free / locked / active per slot)**
+**State machine 2: SlotPool (free / active per slot)**
 
 Each slot in `provider/inventory.txt` is in one of two states at the Python level: free (`agreementId = null`, `expiresAt = null`) or active (`agreementId = <id>`, `expiresAt = <timestamp>`). The `SlotPool` in `shared/slot_pool.py` transitions a slot from free to active on `reserve(...)` and back to free on `release(...)` or when `expiresAt` passes. Cross-reference §6.3 for the on-chain side.
 
