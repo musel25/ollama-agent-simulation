@@ -12,7 +12,7 @@ Architecturally it follows the paper's split:
 - **A2A is the inter-agent protocol.** Consumer ↔ Provider talk over Google's Agent2Agent SDK (JSON-RPC `message/send`, agent cards at `/.well-known/agent-card.json`). The provider's three skills are `get_catalog`, `request_quote`, and `activate`.
 - **MCP is the intra-agent tool-invocation protocol.** Each agent runs its own FastMCP server. The LLM (or the inbound A2A executor) only calls its own MCP — never the other agent's. Cross-agent calls are wrapped inside MCP tools that internally use A2A.
 - **SDN activation is real.** On `activate`, the provider verifies the NFT credential then calls `srl_bandwidth.allocate_bandwidth` (gNMI policer push to Nokia SR Linux + Linux `tc tbf` on the connected CE container) via the sibling repo `srl-gnmi-bandwidth-poc`. `SDN_MOCK=true` short-circuits this for CI/dev.
-- **Atomic on-chain settlement.** Consumer locks ETH via `BandwidthEscrow.requestAgreement`; provider mints an ERC-721 credential via `BandwidthNFT.mint`; `BandwidthEscrow.deposit` swaps ETH→provider and NFT→consumer atomically. The previous standalone `provider/gateway.py` is gone — its role (signature/nonce/ownerOf check) is now an MCP tool the activate-handler calls.
+- **Atomic on-chain settlement.** Consumer locks ETH via `BandwidthEscrow.requestAgreement`; provider mints an ERC-721 credential via `BandwidthNFT.mint`; `BandwidthEscrow.deposit` swaps ETH→provider and NFT→consumer atomically. The previous standalone gateway service is gone — its role (signature/nonce/ownerOf check) is now an MCP tool the activate-handler calls.
 
 This is a research prototype accompanying an academic paper.
 
@@ -72,8 +72,8 @@ ollama-agent-simulation/
 │   ├── contracts.py           # Loads deployed addresses + returns web3 contract objects
 │   ├── slot_pool.py           # File-backed (pe, subinterface, ce) slot reservations, fcntl-locked
 │   └── abi/
-│       ├── BandwidthEscrow.json  # ABI for BandwidthEscrow — used by provider/app.py, consumer/app.py, provider/gateway.py
-│       └── BandwidthNFT.json    # ABI for BandwidthNFT — used by provider/app.py, consumer/app.py, provider/gateway.py
+│       ├── BandwidthEscrow.json  # ABI for BandwidthEscrow — used by provider/app.py, consumer/app.py, provider/mcp_server.py
+│       └── BandwidthNFT.json    # ABI for BandwidthNFT — used by provider/app.py, consumer/app.py, provider/mcp_server.py
 ├── contracts/                 # Solidity smart contracts (Foundry project)
 │   ├── src/
 │   │   ├── BandwidthEscrow.sol   # Double-escrow contract — holds ETH + swaps for NFT
@@ -114,11 +114,10 @@ ollama-agent-simulation/
 | `provider/catalog.py` | `CATALOG`, `CATALOG_BY_ID`, `pending_quotes`, `get_catalog_with_availability`, `make_quote`, `decrement_inventory`, `rewind_inventory`, `cleanup_quotes` | `provider/app.py`, `provider/mcp_server.py` |
 | `provider/mcp_server.py` | `mcp` (FastMCP instance with tools `get_catalog`, `request_quote`) | `provider/app.py` |
 | `provider/app.py` | FastAPI `app`; endpoints: `/.well-known/agent.json`, `/catalog`, `/quote`, `/inventory`, `/address`, `/mcp` | Entry point via uvicorn |
-| `provider/gateway.py` | FastAPI `app`; endpoint: `/service` | Entry point via uvicorn; called by `consumer/app.py` |
 | `consumer/mcp_client.py` | `get_provider_tools()`, `call_provider_tool()`, `mcp_tool_to_ollama()`, `quote_cache` | `consumer/app.py` |
 | `consumer/app.py` | FastAPI `app`; endpoints: `/.well-known/agent.json`, `/chat`, `/log`, `/address`, `/catalog_proxy`, `/check_token` | Entry point via uvicorn; called by `consumer/ui.py` |
 | `consumer/ui.py` | Streamlit app; calls `consumer/app.py` over HTTP | Standalone — run with `streamlit run` |
-| `shared/contracts.py` | `get_nft_contract(w3)`, `get_escrow_contract(w3)` | `provider/app.py`, `provider/gateway.py`, `consumer/app.py` |
+| `shared/contracts.py` | `get_nft_contract(w3)`, `get_escrow_contract(w3)` | `provider/app.py`, `provider/mcp_server.py`, `consumer/app.py` |
 | `shared/abi/BandwidthEscrow.json` | ABI array | `shared/contracts.py` |
 | `shared/abi/BandwidthNFT.json` | ABI array | `shared/contracts.py` |
 | `contracts/deployments/local.json` | `{"bandwidthNFT": "0x...", "bandwidthEscrow": "0x..."}` | `shared/contracts.py` |
@@ -185,7 +184,7 @@ consumer/app.py :8001         (FastAPI — owns the LLM agentic loop)
 
 **4. Signed-nonce credential verification (now an MCP tool):**
 - The provider's MCP `verify_credential_ownership(token_id, signature, nonce)` recovers the signer with `Account.recover_message`, calls `ownerOf(tokenId)` on chain, and confirms the NFT's agreement is `ACTIVE`.
-- Nonce window is ±300s. The standalone `provider/gateway.py:8003` is gone; the activation flow now invokes this tool from `BandwidthProviderExecutor._handle_activate`.
+- Nonce window is ±300s. The standalone gateway service (formerly on port 8003) is gone; the activation flow now invokes this tool from `BandwidthProviderExecutor._handle_activate`.
 
 **5. A2A Agent Cards (proto-based):**
 - `a2a-sdk` 1.0.x exposes `a2a.types.AgentCard` as a protobuf-generated class. Construct with snake_case kwargs; serialize with `google.protobuf.json_format.MessageToDict(card, preserving_proto_field_name=True)`.
@@ -466,9 +465,10 @@ Streamlit state is client-session-scoped and does not persist across page reload
 - `web3` (only `Web3.to_wei` at module level)
 - stdlib only (`fcntl`, `json`, `secrets`, `time`, `pathlib`)
 
-**`provider/gateway.py`** imports from:
-- `shared.contracts`
-- `web3`, `eth_account`, `fastapi`, `uvicorn`
+**`provider/agent_executor.py`** imports from:
+- `a2a.server.agent_execution`, `a2a.server.events`, `a2a.types`
+- `fastmcp`, `google.protobuf.json_format`, `google.protobuf.struct_pb2`
+- `provider.catalog`, `provider.mcp_server`, `shared.a2a_messages`
 
 **`consumer/app.py`** imports from:
 - `consumer.mcp_client` (`call_provider_tool`, `get_provider_tools`, `mcp_tool_to_ollama`, `quote_cache`)
@@ -489,7 +489,7 @@ Streamlit state is client-session-scoped and does not persist across page reload
 
 ### Most-imported shared files
 
-1. `shared/contracts.py` — imported by `provider/app.py`, `provider/gateway.py`, `consumer/app.py`
+1. `shared/contracts.py` — imported by `provider/app.py`, `provider/mcp_server.py`, `consumer/app.py`
 2. `provider/catalog.py` — imported by `provider/app.py`, `provider/mcp_server.py`
 
 ### No circular dependencies detected.
@@ -580,12 +580,12 @@ The `consumer-agent` service sets `OLLAMA_HOST=http://ollama:11434`. If you run 
 | `consumer/app.py` | LLM loop iteration limit; tool dispatch routing (MCP vs. local); quote_cache key type | Full end-to-end purchase still completes; `check_agreement_status` still signs nonce correctly |
 | `shared/contracts.py` | Single source for contract addresses and ABIs; all services depend on it | Any change here breaks all three services simultaneously |
 | `contracts/src/BandwidthEscrow.sol` | ABI changes require regenerating `shared/abi/BandwidthEscrow.json` and redeploying | After Solidity change: `forge build`, copy ABI, redeploy, update `local.json` |
-| `contracts/src/BandwidthNFT.sol` | Same as above; also: changing `TokenMetadata` struct fields breaks `_extract_token_id` and gateway tuple unpacking | Same as above, plus verify `provider/gateway.py:67` tuple unpack matches new struct order |
+| `contracts/src/BandwidthNFT.sol` | Same as above; also: changing `TokenMetadata` struct fields breaks `_extract_token_id` and MCP tool tuple unpacking | Same as above, plus verify `provider/mcp_server.py:135` tuple unpack matches new struct order |
 
 ### Tightly coupled pairs (change one → must change the other)
 
 - `BandwidthEscrow.sol getAgreement()` tuple order ↔ `consumer/app.py:agreement[N]` index accesses (indices 2,3,4,6,7 are used)
-- `BandwidthNFT.sol TokenMetadata` struct field order ↔ `provider/gateway.py:67` destructuring (`agreement_id, bandwidth_mbps, duration_seconds, start_time, endpoint = meta`)
+- `BandwidthNFT.sol TokenMetadata` struct field order ↔ `provider/mcp_server.py:135` destructuring (`agreement_id, mbps, duration, start_time, endpoint = meta`)
 - `provider/catalog.py make_quote()` return keys ↔ `consumer/mcp_client.py call_provider_tool()` cache population (checks for `"agreementId"` key)
 - `provider/mcp_server.py request_quote()` → changes to parameter names change the MCP tool's `inputSchema` → must update consumer's system prompt tool description
 - `provider/inventory.txt` schema (JSONL field names) ↔ `provider/catalog.py` `_read_inventory_locked()` / `_write_inventory_locked()`
