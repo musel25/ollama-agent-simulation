@@ -168,3 +168,76 @@ async def test_settle_should_retry_routing():
     assert g._settle_route({"settle_attempts": 3}) == "error_node"
     assert g._settle_route({"token_id": 7, "settle_attempts": 1}) == "present_node"
     assert g._settle_route({"error": "boom"}) == "error_node"
+
+
+@pytest.mark.asyncio
+async def test_present_node(monkeypatch):
+    async def fake_present(provider_url, token_id):
+        return json.dumps({"status": "active", "bandwidthMbps": 5.0, "tokenId": token_id})
+    monkeypatch.setattr(g, "_present_credential_tool", fake_present)
+
+    out = await g.present_node({
+        "provider_url": "http://provider:8002", "token_id": 42, "log": [],
+    })
+    assert out["activation"]["status"] == "active"
+    assert any("Gateway response:" in e["message"] for e in out["log"])
+
+
+@pytest.mark.asyncio
+async def test_summary_node(monkeypatch):
+    async def fake_llm(prompt, model):
+        return "Done — medium tier (5 Mbps), agreementId=12345, tokenId=42."
+    monkeypatch.setattr(g, "_llm_complete", fake_llm)
+
+    out = await g.summary_node({
+        "chosen_tier": "medium", "chosen_mbps": 5.0,
+        "agreement_id": "12345", "token_id": 42,
+        "activation": {"status": "active"},
+        "thinking": [], "log": [],
+    })
+    assert "medium" in out["final_response"]
+    assert "42" in out["final_response"]
+
+
+@pytest.mark.asyncio
+async def test_error_node():
+    out = await g.error_node({"error": "ouch", "log": []})
+    assert "ouch" in out["final_response"]
+
+
+@pytest.mark.asyncio
+async def test_full_graph_happy_path(monkeypatch, fake_catalog):
+    async def fake_browse(url):
+        return json.dumps(fake_catalog)
+    async def fake_quote(url, pkg):
+        return json.dumps({"agreementId": "777", "priceWei": 2e16,
+                          "bandwidthMbps": 5.0, "durationSeconds": 600})
+    def fake_lock(aid):
+        return "OK 0xdeadbeef"
+    def fake_settle(aid):
+        return "OK tokenId=99"
+    async def fake_present(url, tid):
+        return json.dumps({"status": "active", "bandwidthMbps": 5.0, "tokenId": tid})
+    async def fake_llm(prompt, model):
+        return "medium" if "Reply with EXACTLY ONE WORD" in prompt else \
+               "OK: medium (5 Mbps), agreementId=777, tokenId=99."
+
+    monkeypatch.setattr(g, "_browse_catalog_tool", fake_browse)
+    monkeypatch.setattr(g, "_request_quote_tool", fake_quote)
+    monkeypatch.setattr(g, "_lock_payment_tool", fake_lock)
+    monkeypatch.setattr(g, "_await_settlement_tool", fake_settle)
+    monkeypatch.setattr(g, "_present_credential_tool", fake_present)
+    monkeypatch.setattr(g, "_llm_complete", fake_llm)
+
+    graph = g.build_graph()
+    result = await graph.ainvoke({
+        "user_message": "I need 5 Mbps",
+        "provider_url": "http://provider:8002",
+        "model": "qwen3:4b",
+        "log": [], "thinking": [],
+    })
+    assert result["chosen_tier"] == "medium"
+    assert result["agreement_id"] == "777"
+    assert result["token_id"] == 99
+    assert result["activation"]["status"] == "active"
+    assert "777" in result["final_response"]

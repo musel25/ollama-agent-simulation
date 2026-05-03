@@ -222,3 +222,78 @@ def _settle_route(state: WorkflowState) -> str:
     if state.get("settle_attempts", 0) >= _SETTLE_MAX_ATTEMPTS:
         return "error_node"
     return "settle_node"
+
+
+async def present_node(state: WorkflowState) -> dict:
+    args = {"provider_url": state["provider_url"], "token_id": state["token_id"]}
+    _log_call(state, "present_credential", args)
+    raw = await _present_credential_tool(state["provider_url"], state["token_id"])
+    _log_result(state, "provider", raw)
+    if raw.startswith("ERROR"):
+        return {"log": state["log"], "error": raw}
+    try:
+        activation = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return {"log": state["log"], "error": f"could not parse activation: {e}"}
+    state["log"].append({
+        "from": "provider",
+        "message": f"Gateway response: {json.dumps(activation)}",
+    })
+    return {"log": state["log"], "activation": activation}
+
+
+async def summary_node(state: WorkflowState) -> dict:
+    prompt = (
+        "Summarize this completed bandwidth purchase in ONE sentence. "
+        "Use exactly these values verbatim — do NOT change any number:\n"
+        f"- tier: {state['chosen_tier']}\n"
+        f"- bandwidth: {state['chosen_mbps']} Mbps\n"
+        f"- agreementId: {state['agreement_id']}\n"
+        f"- tokenId: {state['token_id']}\n"
+        f"- activation status: {state['activation'].get('status', 'unknown')}\n"
+        "Reply with the sentence only — no preamble, no JSON, no tool calls."
+    )
+    text = await _llm_complete(prompt, state.get("model") or DEFAULT_MODEL)
+    state.setdefault("thinking", []).append(f"summary raw: {text!r}")
+    # Belt-and-braces: if the LLM didn't include the key facts, build a deterministic
+    # sentence so the user always sees the truth.
+    fallback = (f"Active service — {state['chosen_tier']} tier "
+                f"({state['chosen_mbps']} Mbps), agreementId={state['agreement_id']}, "
+                f"tokenId={state['token_id']}.")
+    final = text if (str(state["agreement_id"]) in text and str(state["token_id"]) in text) else fallback
+    return {"final_response": final, "thinking": state["thinking"]}
+
+
+async def error_node(state: WorkflowState) -> dict:
+    msg = state.get("error") or "unknown error"
+    return {"final_response": f"Workflow stopped: {msg}"}
+
+
+def _route_after(next_node: str):
+    """Common error-routing factory: any node that set state['error'] jumps to error_node."""
+    def router(state: WorkflowState) -> str:
+        return "error_node" if state.get("error") else next_node
+    return router
+
+
+def build_graph():
+    builder = StateGraph(WorkflowState)
+    builder.add_node("browse_node", browse_node)
+    builder.add_node("pick_tier_node", pick_tier_node)
+    builder.add_node("quote_node", quote_node)
+    builder.add_node("lock_node", lock_node)
+    builder.add_node("settle_node", settle_node)
+    builder.add_node("present_node", present_node)
+    builder.add_node("summary_node", summary_node)
+    builder.add_node("error_node", error_node)
+
+    builder.add_edge(START, "browse_node")
+    builder.add_conditional_edges("browse_node", _route_after("pick_tier_node"))
+    builder.add_conditional_edges("pick_tier_node", _route_after("quote_node"))
+    builder.add_conditional_edges("quote_node", _route_after("lock_node"))
+    builder.add_conditional_edges("lock_node", _route_after("settle_node"))
+    builder.add_conditional_edges("settle_node", _settle_route)
+    builder.add_conditional_edges("present_node", _route_after("summary_node"))
+    builder.add_edge("summary_node", END)
+    builder.add_edge("error_node", END)
+    return builder.compile()
