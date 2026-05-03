@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from typing import TypedDict
 
+from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
 
 # Wrap the FastMCP tool functions as plain async callables.
@@ -57,6 +59,58 @@ def _log_result(state: WorkflowState, sender: str, result: str) -> None:
     })
 
 
+DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+
+# Module-level cache so we don't reconnect for every node call.
+_llm_cache: dict[str, ChatOllama] = {}
+
+_TIER_WORD_TO_RANK = {
+    "small": 0, "cheapest": 0, "basic": 0, "minimum": 0,
+    "medium": 1, "standard": 1, "mid": 1,
+    "large": 2, "fast": 2, "biggest": 2, "premium": 2,
+}
+
+
+def _get_llm(model: str) -> ChatOllama:
+    if model not in _llm_cache:
+        _llm_cache[model] = ChatOllama(model=model, base_url=OLLAMA_HOST, temperature=0)
+    return _llm_cache[model]
+
+
+async def _llm_complete(prompt: str, model: str) -> str:
+    """Plain text completion. Returns the model's content string (no tool calls)."""
+    llm = _get_llm(model)
+    resp = await llm.ainvoke(prompt)
+    return (resp.content or "").strip()
+
+
+def _rank_catalog(catalog: list[dict]) -> list[dict]:
+    """Sort tiers by mbps ascending so index 0=small, 1=medium, 2=large."""
+    return sorted(catalog, key=lambda p: p["mbps"])
+
+
+def _deterministic_tier_pick(user_message: str, catalog: list[dict]) -> dict:
+    """Fallback rule used when the LLM output is not parseable to a tier word."""
+    ranked = _rank_catalog(catalog)
+    msg = user_message.lower()
+
+    # Numeric "X Mbps" → smallest tier with mbps >= X; else largest tier.
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:mbps|mbit|m)\b", msg)
+    if m:
+        want = float(m.group(1))
+        candidates = [p for p in ranked if p["mbps"] >= want]
+        chosen = candidates[0] if candidates else ranked[-1]
+        return chosen
+
+    # Word match
+    for word, rank in _TIER_WORD_TO_RANK.items():
+        if word in msg:
+            return ranked[min(rank, len(ranked) - 1)]
+
+    return ranked[len(ranked) // 2]  # default: middle
+
+
 async def browse_node(state: WorkflowState) -> dict:
     args = {"provider_url": state["provider_url"]}
     _log_call(state, "browse_catalog", args)
@@ -69,3 +123,36 @@ async def browse_node(state: WorkflowState) -> dict:
     except json.JSONDecodeError as e:
         return {"log": state["log"], "error": f"could not parse catalog: {e}"}
     return {"log": state["log"], "catalog": catalog}
+
+
+async def pick_tier_node(state: WorkflowState) -> dict:
+    catalog = state["catalog"]
+    ranked = _rank_catalog(catalog)
+    valid_words = {p["packageId"].lower() for p in ranked}
+
+    prompt = (
+        f"User says: {state['user_message']!r}\n"
+        f"Catalog tiers (smallest to largest):\n"
+        + "\n".join(f"- {p['packageId']}: {p['mbps']} Mbps" for p in ranked)
+        + "\n\nReply with EXACTLY ONE WORD: the packageId you choose. "
+          "No punctuation, no explanation, no JSON. Just the word."
+    )
+    raw = await _llm_complete(prompt, state.get("model") or DEFAULT_MODEL)
+
+    state.setdefault("thinking", []).append(f"pick_tier raw: {raw!r}")
+
+    # Try to find a tier word in the LLM output (case-insensitive, first match wins).
+    chosen = None
+    for token in re.findall(r"[a-zA-Z]+", raw.lower()):
+        if token in valid_words:
+            chosen = next(p for p in ranked if p["packageId"].lower() == token)
+            break
+
+    if chosen is None:
+        chosen = _deterministic_tier_pick(state["user_message"], catalog)
+
+    return {
+        "chosen_tier": chosen["packageId"],
+        "chosen_mbps": chosen["mbps"],
+        "thinking": state["thinking"],
+    }

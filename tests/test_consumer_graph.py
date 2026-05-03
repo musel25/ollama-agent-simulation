@@ -38,3 +38,48 @@ async def test_browse_node_handles_error(monkeypatch):
     out = await g.browse_node({"provider_url": "http://x", "log": []})
     assert out["error"]
     assert "provider unreachable" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_pick_tier_explicit_word(monkeypatch, fake_catalog):
+    async def fake_llm(prompt: str, model: str) -> str:
+        return "medium"
+    monkeypatch.setattr(g, "_llm_complete", fake_llm)
+
+    out = await g.pick_tier_node({
+        "user_message": "I want medium please",
+        "catalog": fake_catalog,
+        "log": [],
+    })
+    assert out["chosen_tier"] == "medium"
+    assert out["chosen_mbps"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_pick_tier_numeric_request_falls_back_to_rule(monkeypatch, fake_catalog):
+    # Even if the LLM returns garbage, the deterministic fallback picks the
+    # smallest tier whose mbps >= user's requested number.
+    async def fake_llm(prompt, model):
+        return "I think probably the great one"  # not parseable
+    monkeypatch.setattr(g, "_llm_complete", fake_llm)
+
+    out = await g.pick_tier_node({
+        "user_message": "I need 4 Mbps",
+        "catalog": fake_catalog,
+        "log": [],
+    })
+    assert out["chosen_tier"] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_pick_tier_request_exceeds_largest(monkeypatch, fake_catalog):
+    async def fake_llm(prompt, model):
+        return "???"
+    monkeypatch.setattr(g, "_llm_complete", fake_llm)
+
+    out = await g.pick_tier_node({
+        "user_message": "I need 100 Mbps",
+        "catalog": fake_catalog,
+        "log": [],
+    })
+    assert out["chosen_tier"] == "large"
