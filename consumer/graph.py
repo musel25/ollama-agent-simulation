@@ -235,6 +235,9 @@ async def present_node(state: WorkflowState) -> dict:
         activation = json.loads(raw)
     except json.JSONDecodeError as e:
         return {"log": state["log"], "error": f"could not parse activation: {e}"}
+    if not isinstance(activation, dict):
+        return {"log": state["log"],
+                "error": f"activation is not a JSON object: {raw[:200]}"}
     state["log"].append({
         "from": "provider",
         "message": f"Gateway response: {json.dumps(activation)}",
@@ -243,25 +246,29 @@ async def present_node(state: WorkflowState) -> dict:
 
 
 async def summary_node(state: WorkflowState) -> dict:
+    # Always return a deterministic, factually-correct sentence. We still call
+    # the LLM (for observability / future prose flavor) but never use its
+    # output as the user-visible response — small local models are unreliable
+    # narrators and a fluently-wrong sentence would defeat the whole purpose
+    # of the state-machine refactor.
+    sentence = (f"Active service — {state['chosen_tier']} tier "
+                f"({state['chosen_mbps']} Mbps), "
+                f"agreementId={state['agreement_id']}, "
+                f"tokenId={state['token_id']}.")
     prompt = (
-        "Summarize this completed bandwidth purchase in ONE sentence. "
-        "Use exactly these values verbatim — do NOT change any number:\n"
+        "Briefly acknowledge a successful bandwidth purchase:\n"
         f"- tier: {state['chosen_tier']}\n"
         f"- bandwidth: {state['chosen_mbps']} Mbps\n"
         f"- agreementId: {state['agreement_id']}\n"
         f"- tokenId: {state['token_id']}\n"
-        f"- activation status: {state['activation'].get('status', 'unknown')}\n"
-        "Reply with the sentence only — no preamble, no JSON, no tool calls."
+        "Reply with one short sentence."
     )
-    text = await _llm_complete(prompt, state.get("model") or DEFAULT_MODEL)
+    try:
+        text = await _llm_complete(prompt, state.get("model") or DEFAULT_MODEL)
+    except Exception as e:
+        text = f"<llm error: {e}>"
     state.setdefault("thinking", []).append(f"summary raw: {text!r}")
-    # Belt-and-braces: if the LLM didn't include the key facts, build a deterministic
-    # sentence so the user always sees the truth.
-    fallback = (f"Active service — {state['chosen_tier']} tier "
-                f"({state['chosen_mbps']} Mbps), agreementId={state['agreement_id']}, "
-                f"tokenId={state['token_id']}.")
-    final = text if (str(state["agreement_id"]) in text and str(state["token_id"]) in text) else fallback
-    return {"final_response": final, "thinking": state["thinking"]}
+    return {"final_response": sentence, "thinking": state["thinking"]}
 
 
 async def error_node(state: WorkflowState) -> dict:

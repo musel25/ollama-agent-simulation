@@ -184,9 +184,11 @@ async def test_present_node(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_summary_node(monkeypatch):
+async def test_summary_node_uses_deterministic_sentence(monkeypatch):
+    # Even if the LLM returns a fluently-wrong sentence with the right ids,
+    # summary_node returns the deterministic truth, not the LLM's text.
     async def fake_llm(prompt, model):
-        return "Done — medium tier (5 Mbps), agreementId=12345, tokenId=42."
+        return "Failed to activate. agreementId=12345, tokenId=42."  # liar
     monkeypatch.setattr(g, "_llm_complete", fake_llm)
 
     out = await g.summary_node({
@@ -195,8 +197,27 @@ async def test_summary_node(monkeypatch):
         "activation": {"status": "active"},
         "thinking": [], "log": [],
     })
+    assert "Active service" in out["final_response"]
     assert "medium" in out["final_response"]
+    assert "12345" in out["final_response"]
     assert "42" in out["final_response"]
+    # The LLM's lie did NOT make it into the user-visible response:
+    assert "Failed" not in out["final_response"]
+    # But it IS captured in thinking for observability:
+    assert any("Failed to activate" in t for t in out["thinking"])
+
+
+@pytest.mark.asyncio
+async def test_present_node_rejects_non_dict_activation(monkeypatch):
+    async def fake_present(provider_url, token_id):
+        return json.dumps(["not", "a", "dict"])
+    monkeypatch.setattr(g, "_present_credential_tool", fake_present)
+
+    out = await g.present_node({
+        "provider_url": "http://x", "token_id": 1, "log": [],
+    })
+    assert "error" in out
+    assert "activation" not in out
 
 
 @pytest.mark.asyncio
