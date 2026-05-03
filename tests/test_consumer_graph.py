@@ -184,6 +184,20 @@ async def test_present_node(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_present_node_rejects_non_active_status(monkeypatch):
+    async def fake_present(provider_url, token_id):
+        return json.dumps({"status": "denied", "reason": "expired"})
+    monkeypatch.setattr(g, "_present_credential_tool", fake_present)
+
+    out = await g.present_node({
+        "provider_url": "http://x", "token_id": 1, "log": [],
+    })
+    assert "error" in out
+    assert "not active" in out["error"]
+    assert "activation" not in out
+
+
+@pytest.mark.asyncio
 async def test_summary_node_uses_deterministic_sentence(monkeypatch):
     # Even if the LLM returns a fluently-wrong sentence with the right ids,
     # summary_node returns the deterministic truth, not the LLM's text.

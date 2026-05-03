@@ -238,6 +238,9 @@ async def present_node(state: WorkflowState) -> dict:
     if not isinstance(activation, dict):
         return {"log": state["log"],
                 "error": f"activation is not a JSON object: {raw[:200]}"}
+    if activation.get("status") != "active":
+        return {"log": state["log"],
+                "error": f"activation not active: {activation}"}
     state["log"].append({
         "from": "provider",
         "message": f"Gateway response: {json.dumps(activation)}",
