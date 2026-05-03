@@ -1,5 +1,6 @@
-# Codebase Technical Reference
-> AI-to-AI assistant map. Do not modify this file manually — regenerate it when the architecture changes.
+# Architecture Reference
+
+> **Audience:** developers reading or modifying the code. Assumes you have already read [`01-introduction.md`](01-introduction.md) and the concepts you need from [`02-concepts.md`](02-concepts.md). For end-to-end behaviour, read [`03-walkthrough.md`](03-walkthrough.md) first.
 
 ---
 
@@ -14,8 +15,6 @@ Architecturally it follows the paper's split:
 - **Atomic on-chain settlement.** Consumer locks ETH via `BandwidthEscrow.requestAgreement`; provider mints an ERC-721 credential via `BandwidthNFT.mint`; `BandwidthEscrow.deposit` swaps ETH→provider and NFT→consumer atomically. The previous standalone `provider/gateway.py` is gone — its role (signature/nonce/ownerOf check) is now an MCP tool the activate-handler calls.
 
 This is a research prototype accompanying an academic paper.
-
-**IMPORTANT:** There are two generations of code in this repo. The **legacy prototype** (`app.py`, `consumer_agent.py`, `provider_server.py`, `catalog.txt`, `agreements.json`) uses plain HTTP and no blockchain. The **current production codebase** lives in `consumer/`, `provider/`, and `shared/` packages and uses MCP + Ethereum. The legacy files are dead code for the purpose of any active development.
 
 ---
 
@@ -106,13 +105,6 @@ ollama-agent-simulation/
 │   ├── main.tex
 │   ├── references.bib
 │   └── notes.md               # Citation justifications for the paper
-│
-│ ── LEGACY / DEAD CODE (do not modify) ──────────────────────────────────
-├── app.py                     # Legacy Streamlit app — wraps consumer_agent.py (old HTTP approach)
-├── consumer_agent.py          # Legacy consumer — HTTP to provider_server.py (no MCP, no blockchain)
-├── provider_server.py         # Legacy provider — plain HTTP, CSV catalog, UUID tokens
-├── catalog.txt                # Legacy CSV catalog (consumer_agent.py reads this)
-└── agreements.json            # Legacy agreements store (provider_server.py writes this)
 ```
 
 ### File annotations
@@ -352,21 +344,6 @@ ChatResponse: { response: str, log: list[dict], thinking: list[str] }
 }
 ```
 
-### Gateway response (`provider/gateway.py:79`)
-
-```python
-{
-  "token_id": int,
-  "agreement_id": int,
-  "bandwidth_mbps": int,
-  "duration_seconds": int,
-  "seconds_remaining": int,
-  "status": str,
-  "endpoint": str,
-  "signer": str,   # recovered Ethereum address
-}
-```
-
 ---
 
 ## 7. API & INTERFACES
@@ -586,11 +563,9 @@ The `consumer-agent` service sets `OLLAMA_HOST=http://ollama:11434`. If you run 
 
 10. **`_extract_token_id` is fragile.** `provider/app.py:77-81` parses the Transfer event log by matching the event signature hash and reading `topics[3]`. This assumes ERC-721's `Transfer(from, to, tokenId)` where the 4th topic is the tokenId. If OpenZeppelin changes their event encoding, this breaks silently. A safer approach would use the web3.py event decoder.
 
-11. **Legacy files (`app.py`, `consumer_agent.py`, `provider_server.py`) are not deleted.** They are dead code — `consumer_agent.py` calls `provider_server.py` over HTTP with no blockchain. They share no imports with the current `consumer/`, `provider/`, `shared/` packages. Do not attempt to run them alongside the current stack (port conflicts). They exist for historical reference.
+11. **`think=False` in Ollama call.** `consumer/app.py:299` passes `think=False` to the Ollama chat API to disable native chain-of-thought. Thinking chunks emitted in `<think>...</think>` tags in `msg.content` are still parsed by `_extract_thinking()` — this is a belt-and-suspenders approach for models that emit thinking in content anyway.
 
-12. **`think=False` in Ollama call.** `consumer/app.py:299` passes `think=False` to the Ollama chat API to disable native chain-of-thought. Thinking chunks emitted in `<think>...</think>` tags in `msg.content` are still parsed by `_extract_thinking()` — this is a belt-and-suspenders approach for models that emit thinking in content anyway.
-
-13. **QUOTE_TTL is 60 seconds globally.** If the consumer's LLM loop takes more than 60 seconds between `request_quote` and `execute_agreement` (e.g., model is slow), the provider will reject the agreement as expired even though ETH was locked. The consumer would need to re-quote.
+12. **QUOTE_TTL is 60 seconds globally.** If the consumer's LLM loop takes more than 60 seconds between `request_quote` and `execute_agreement` (e.g., model is slow), the provider will reject the agreement as expired even though ETH was locked. The consumer would need to re-quote.
 
 ---
 

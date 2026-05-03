@@ -24,7 +24,7 @@ Verdict: **publishable after a focused alignment pass — perhaps 1–2 days of 
 | Paper claim | Code location | Status |
 |---|---|---|
 | A2A is the inter-agent protocol; MCP is the intra-agent protocol | `consumer/a2a_client.py`, `provider/agent_executor.py` (A2A); `consumer/mcp_server.py`, `provider/mcp_server.py` (MCP) | ✅ exact |
-| Asymmetric MCP toolsets (consumer: wallet/sign/lock/present; provider: mint/verify/swap/SDN) | Same files; tool lists in `CODEBASE_REFERENCE.md §7` | ✅ exact |
+| Asymmetric MCP toolsets (consumer: wallet/sign/lock/present; provider: mint/verify/swap/SDN) | Same files; tool lists in `docs/04-architecture.md §7` | ✅ exact |
 | A2A is the only point of contact; everything else hidden behind MCP | LLM only sees consumer MCP; cross-agent calls wrapped in MCP tools that call `send_provider_action` | ✅ exact |
 | Smart-contract escrow with atomic swap (§Architecture, "Payment") | `contracts/src/BandwidthEscrow.sol::deposit()` — checks-effects-interactions, atomic ETH↔NFT | ✅ exact |
 | NFT credential, on-chain ownership-checkable, persists after redemption | `BandwidthNFT.sol` ERC-721 + on-chain `TokenMetadata`; `verify_credential_ownership` calls `ownerOf()` | ✅ exact |
@@ -134,7 +134,7 @@ The paper differentiates from Bandara et al. on two dimensions: agents are gener
 
 These won't change the paper but will affect a reviewer who clones the repo.
 
-1. **Delete legacy dead code.** `app.py`, `consumer_agent.py`, `provider_server.py`, `catalog.txt`, `agreements.json` are explicitly marked dead in `CODEBASE_REFERENCE.md §1` and §11. They will confuse anyone trying to reproduce the paper's prototype. The `chore: legacy purge` PR is two `git rm` commands.
+1. **Delete legacy dead code.** `app.py`, `consumer_agent.py`, `provider_server.py`, `catalog.txt`, `agreements.json` are explicitly marked dead in `docs/04-architecture.md §1` and §11. They will confuse anyone trying to reproduce the paper's prototype. The `chore: legacy purge` PR is two `git rm` commands.
 2. **Pin the model in `.env.example`.** As above, `qwen3:4b` should be the documented default if the paper says Qwen3-4B.
 3. **Add `make eval`** that runs the harness from §3.3 and produces a `eval/results.json` (and a markdown table the paper imports).
 4. **Add a tiny `forge test` for `BandwidthEscrow`** so `forge test --gas-report` produces canonical gas numbers for the table — gas measured from a unit test is more reproducible than gas measured from a demo run.
