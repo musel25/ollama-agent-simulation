@@ -156,3 +156,34 @@ async def pick_tier_node(state: WorkflowState) -> dict:
         "chosen_mbps": chosen["mbps"],
         "thinking": state["thinking"],
     }
+
+
+async def quote_node(state: WorkflowState) -> dict:
+    args = {"provider_url": state["provider_url"], "package_id": state["chosen_tier"]}
+    _log_call(state, "request_quote", args)
+    raw = await _request_quote_tool(state["provider_url"], state["chosen_tier"])
+    _log_result(state, "provider", raw)
+    if raw.startswith("ERROR"):
+        return {"log": state["log"], "error": raw}
+    try:
+        quote = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return {"log": state["log"], "error": f"could not parse quote: {e}"}
+    return {"log": state["log"], "agreement_id": str(quote["agreementId"])}
+
+
+async def lock_node(state: WorkflowState) -> dict:
+    args = {"agreement_id": state["agreement_id"]}
+    _log_call(state, "lock_payment", args)
+    # _lock_payment_tool is sync (does sync web3 calls); offload to a thread.
+    raw = await asyncio.to_thread(_lock_payment_tool, state["agreement_id"])
+    _log_result(state, "consumer", raw)
+    if raw.startswith("ERROR"):
+        return {"log": state["log"], "error": raw}
+    # Extract the tx hash and emit the legacy log line the dashboard greps for.
+    tx_hash = raw.removeprefix("OK ").strip()
+    state["log"].append({
+        "from": "consumer",
+        "message": f"requestAgreement() sent. tx={tx_hash}",
+    })
+    return {"log": state["log"], "tx_hash": tx_hash}

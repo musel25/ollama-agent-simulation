@@ -83,3 +83,56 @@ async def test_pick_tier_request_exceeds_largest(monkeypatch, fake_catalog):
         "log": [],
     })
     assert out["chosen_tier"] == "large"
+
+
+@pytest.mark.asyncio
+async def test_quote_node(monkeypatch):
+    async def fake_quote(provider_url, package_id):
+        return json.dumps({
+            "agreementId": "12345",
+            "priceWei": 2 * 10**16,
+            "bandwidthMbps": 5.0,
+            "durationSeconds": 600,
+        })
+    monkeypatch.setattr(g, "_request_quote_tool", fake_quote)
+
+    out = await g.quote_node({
+        "provider_url": "http://provider:8002",
+        "chosen_tier": "medium",
+        "log": [],
+    })
+    assert out["agreement_id"] == "12345"
+    assert any("[MCP] request_quote" in e["message"] for e in out["log"])
+
+
+@pytest.mark.asyncio
+async def test_quote_node_propagates_error(monkeypatch):
+    async def fake_quote(provider_url, package_id):
+        return "ERROR: tier sold out"
+    monkeypatch.setattr(g, "_request_quote_tool", fake_quote)
+
+    out = await g.quote_node({
+        "provider_url": "http://x", "chosen_tier": "medium", "log": [],
+    })
+    assert "tier sold out" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_lock_node(monkeypatch):
+    def fake_lock(agreement_id):
+        return "OK 0xabc123"
+    monkeypatch.setattr(g, "_lock_payment_tool", fake_lock)
+
+    out = await g.lock_node({"agreement_id": "12345", "log": []})
+    assert out["tx_hash"] == "0xabc123"
+    assert any("requestAgreement() sent." in e["message"] for e in out["log"])
+
+
+@pytest.mark.asyncio
+async def test_lock_node_propagates_error(monkeypatch):
+    def fake_lock(agreement_id):
+        return "ERROR: insufficient funds"
+    monkeypatch.setattr(g, "_lock_payment_tool", fake_lock)
+
+    out = await g.lock_node({"agreement_id": "12345", "log": []})
+    assert "insufficient funds" in out["error"]
