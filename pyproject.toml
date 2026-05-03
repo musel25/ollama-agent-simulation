@@ -1,7 +1,7 @@
 [project]
 name = "ollama-agent-simulation"
 version = "0.1.0"
-description = "Add your description here"
+description = "Proof-of-concept: two AI agents negotiate and pay for network bandwidth using MCP, A2A, and an Ethereum smart-contract escrow."
 requires-python = ">=3.13"
 dependencies = [
     "a2a-sdk>=1.0,<2.0",
