@@ -191,6 +191,100 @@ def _render_tool_row(name: str, tag: str, ambient: bool, status: str) -> str:
     )
 
 
+def _parse_timeline(log: list[dict], turn: int) -> list[dict]:
+    """Convert /chat log entries into A2A wire bubbles + on-chain markers.
+
+    Returns a list of {kind, sender, text, turn} where:
+      kind = 'bubble' or 'chain'
+      sender = 'consumer' or 'provider' (only meaningful for bubbles)
+    """
+    out: list[dict] = []
+    for e in log:
+        sender = e.get("from", "")
+        msg = e.get("message", "")
+        if not sender or not msg:
+            continue
+        if msg.startswith("requestAgreement()"):
+            out.append({"kind": "chain", "text": "⛓ requestAgreement on chain", "turn": turn})
+        elif "Agreement ACTIVE" in msg:
+            out.append({"kind": "chain", "text": f"⛓ {msg}", "turn": turn})
+        elif sender in ("consumer", "provider"):
+            out.append({"kind": "bubble", "sender": sender, "text": msg, "turn": turn})
+    return out
+
+
+def _merge_timeline(existing: list[dict], new_items: list[dict]) -> list[dict]:
+    seen = {(i["kind"], i.get("sender", ""), i["text"], i["turn"]) for i in existing}
+    out = list(existing)
+    for i in new_items:
+        key = (i["kind"], i.get("sender", ""), i["text"], i["turn"])
+        if key not in seen:
+            out.append(i)
+            seen.add(key)
+    return out
+
+
+def render_wire_panel() -> None:
+    bubbles_html = []
+    for item in st.session_state.timeline:
+        if item["kind"] == "chain":
+            bubbles_html.append(
+                f'<div style="text-align:center;color:#f59e0b;font-size:10px;'
+                f'padding:6px 0;letter-spacing:0.3px;">{html_lib.escape(item["text"])}</div>'
+            )
+            continue
+        sender = item["sender"]
+        text = html_lib.escape(item["text"])
+        if sender == "consumer":
+            bubbles_html.append(
+                f'<div style="align-self:flex-start;background:#1a1a2e;'
+                f'border:1px solid #2a2a4e;border-left:3px solid #818cf8;'
+                f'border-radius:8px;padding:6px 9px;font-size:10px;color:#d4d8ff;'
+                f'max-width:88%;font-family:ui-monospace,monospace;line-height:1.4;'
+                f'word-break:break-word;">'
+                f'<div style="font-size:8px;letter-spacing:0.4px;text-transform:uppercase;'
+                f'opacity:0.7;margin-bottom:2px;">consumer →</div>{text}</div>'
+            )
+        else:
+            bubbles_html.append(
+                f'<div style="align-self:flex-end;background:#1a2535;'
+                f'border:1px solid #2a3545;border-right:3px solid #60a5fa;'
+                f'border-radius:8px;padding:6px 9px;font-size:10px;color:#d4e4ff;'
+                f'max-width:88%;font-family:ui-monospace,monospace;line-height:1.4;'
+                f'text-align:right;word-break:break-word;">'
+                f'<div style="font-size:8px;letter-spacing:0.4px;text-transform:uppercase;'
+                f'opacity:0.7;margin-bottom:2px;">← provider</div>{text}</div>'
+            )
+
+    bubbles_count = sum(1 for i in st.session_state.timeline if i["kind"] == "bubble")
+    body = ("".join(bubbles_html)
+            if st.session_state.timeline
+            else '<div style="color:var(--text-faint);font-size:11px;">No agent-to-agent traffic yet — type intent into the chat below.</div>')
+
+    st.markdown(f'''
+      <div class="panel wire-panel">
+        <div class="panel-title">
+          <span>↔ Agent-to-Agent Wire</span>
+          <span class="meta">JSON-RPC over HTTP · {bubbles_count} msgs</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;max-height:520px;overflow-y:auto;">
+          {body}
+        </div>
+      </div>
+    ''', unsafe_allow_html=True)
+
+
+def ingest_chat_response(turn: int, log: list[dict]) -> None:
+    """Merge a /chat response log into all cumulative session_state buckets."""
+    st.session_state.timeline = _merge_timeline(
+        st.session_state.timeline, _parse_timeline(log, turn)
+    )
+    st.session_state.consumer_tool_log = _merge_tool_log(
+        st.session_state.consumer_tool_log,
+        _parse_consumer_tools_from_log(log, turn),
+    )
+
+
 def render_consumer_panel() -> None:
     addr = _fetch_address(CONSUMER_BASE_URL) or "—"
     addr_short = (addr[:6] + "…" + addr[-4:]) if addr != "—" else "—"
@@ -325,10 +419,32 @@ col_l, col_c, col_r = st.columns([1, 1.2, 1])
 with col_l:
     render_consumer_panel()
 with col_c:
-    st.markdown('<div class="panel wire-panel"><div class="panel-title">A2A Wire</div>'
-                '<div style="color:var(--text-faint);font-size:11px;">— wired in next task —</div></div>',
-                unsafe_allow_html=True)
+    render_wire_panel()
 with col_r:
     st.markdown('<div class="panel provider-panel"><div class="panel-title">Provider Agent</div>'
                 '<div style="color:var(--text-faint);font-size:11px;">— wired in next task —</div></div>',
                 unsafe_allow_html=True)
+
+
+user_input = st.chat_input("Ask the consumer agent…")
+if user_input:
+    st.session_state.turn += 1
+    st.session_state.running = True
+    st.session_state.chat_history.append({"role": "user", "content": user_input})
+    try:
+        with httpx.Client(timeout=300.0) as c:
+            r = c.post(f"{CONSUMER_BASE_URL}/chat",
+                       json={"message": user_input, "model": selected_model})
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        data = {"response": f"Error: {e}", "log": [], "thinking": []}
+
+    ingest_chat_response(st.session_state.turn, data.get("log", []))
+    st.session_state.chat_history.append({
+        "role": "assistant",
+        "content": data.get("response", ""),
+        "thinking": data.get("thinking", []),
+    })
+    st.session_state.running = False
+    st.rerun()
