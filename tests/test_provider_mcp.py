@@ -198,3 +198,34 @@ async def test_tool_call_log_records_invocations():
     assert entries[0]["tool"] == "get_catalog"
     assert entries[0]["status"] == "ok"
     assert "ts" in entries[0]
+
+
+def test_summarize_args_truncates_long_values():
+    from provider.mcp_server import _summarize_args
+    result = _summarize_args({"x": "a" * 100, "y": "short"})
+    assert result["x"].endswith("...")
+    assert len(result["x"]) == 80   # 77 chars + "..."
+    assert result["y"] == "short"
+
+
+@pytest.mark.asyncio
+async def test_tool_call_log_records_errors():
+    from provider import mcp_server
+    mcp_server.tool_call_log.clear()
+
+    # Define a sync tool inside a fresh FastMCP server, decorated with
+    # _logged, that raises. Verify the entry's status flips to 'error'.
+    from fastmcp import FastMCP
+    test_mcp = FastMCP("test")
+
+    @test_mcp.tool()
+    @mcp_server._logged
+    def buggy() -> str:
+        raise RuntimeError("kaboom")
+
+    with pytest.raises(Exception):
+        async with Client(test_mcp) as client:
+            await client.call_tool("buggy", {})
+
+    entries = list(mcp_server.tool_call_log)
+    assert any(e["tool"] == "buggy" and e["status"] == "error" for e in entries)

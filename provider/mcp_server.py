@@ -15,7 +15,6 @@ Mounted at /mcp inside provider/app.py.
 """
 from __future__ import annotations
 
-import asyncio
 import dataclasses as _dc
 import inspect
 import json
@@ -32,6 +31,9 @@ from web3 import Web3
 from provider.catalog import get_catalog_with_availability, make_quote
 from shared.contracts import get_escrow_contract, get_nft_contract
 
+# Per-process in-memory deque exposed via provider/app.py:/tool_log.
+# Multi-worker deployments (gunicorn --workers >1) would each get their
+# own deque, leading to inconsistent /tool_log responses. Single-worker only.
 tool_call_log: deque = deque(maxlen=500)
 
 
