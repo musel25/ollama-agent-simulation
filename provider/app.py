@@ -35,7 +35,11 @@ from provider.catalog import (
     slot_pool,
 )
 from provider.mcp_server import mcp
-from shared.contracts import get_escrow_contract
+from shared.contracts import get_escrow_contract, get_nft_contract
+
+# CE peer pairs across pe1 ↔ pe2 (defined by the clab topology in
+# srl-gnmi-bandwidth-poc/topology). Used by /probe to pick the iperf3 peer.
+CE_PEER = {"ce1": "ce2", "ce2": "ce1", "ce3": "ce4", "ce4": "ce3"}
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("provider")
@@ -191,6 +195,46 @@ def get_inventory() -> list[dict]:
 @app.get("/address")
 def provider_address() -> dict:
     return {"address": PROVIDER_ADDRESS}
+
+
+class ProbeRequest(BaseModel):
+    tokenId: int
+
+
+@app.post("/probe")
+async def probe(req: ProbeRequest) -> dict:
+    nft = get_nft_contract(w3)
+    try:
+        agreement_id, mbps, _duration, _start, _endpoint = (
+            nft.functions.getTokenMetadata(int(req.tokenId)).call()
+        )
+    except Exception:
+        raise HTTPException(404, f"token {req.tokenId} does not exist")
+
+    slot = slot_pool.lookup(int(agreement_id))
+    if slot is None:
+        raise HTTPException(409, f"no active slot bound to agreement {agreement_id}")
+
+    dst_ce = CE_PEER.get(slot.ce)
+    if dst_ce is None:
+        raise HTTPException(500, f"no peer mapping for {slot.ce}")
+
+    async with MCPClient(mcp) as client:
+        result = await client.call_tool(
+            "verify_bandwidth",
+            {"src_ce": slot.ce, "dst_ce": dst_ce, "expected_mbps": float(mbps)},
+        )
+        verify = _json.loads(result.content[0].text)
+
+    return {
+        "timestamp": time.time(),
+        "src_ce": slot.ce,
+        "dst_ce": dst_ce,
+        "expected_mbps": float(mbps),
+        "measured_mbps": float(verify.get("measured_mbps", 0.0)),
+        "passed": bool(verify.get("passed", False)),
+        "message": verify.get("message", ""),
+    }
 
 
 _a2a_handler = DefaultRequestHandler(
