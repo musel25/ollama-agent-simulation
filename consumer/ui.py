@@ -20,7 +20,7 @@ from web3 import Web3
 CONSUMER_BASE_URL = os.environ.get("CONSUMER_BASE_URL", "http://localhost:8001")
 PROVIDER_BASE_URL = os.environ.get("PROVIDER_BASE_URL", "http://localhost:8002")
 DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
-MODELS = list(dict.fromkeys([DEFAULT_MODEL, "llama3.2:3b", "llama3.2:1b"]))
+MODELS = [DEFAULT_MODEL]
 SDN_MOCK = os.environ.get("SDN_MOCK", "true").lower() == "true"
 
 # ── Streamlit page setup ───────────────────────────────────────────────────
@@ -109,7 +109,6 @@ CONSUMER_TOOLS = [
     ("await_settlement",   "on-chain", False),
     ("present_credential", "a2a",      False),
     ("wallet_address",     "local",    True),   # ambient
-    ("sign_message",       "local",    True),   # ambient
 ]
 
 PROVIDER_TOOLS = [
@@ -124,17 +123,17 @@ PROVIDER_TOOLS = [
 ]
 
 
-_MCP_RE = re.compile(r"\[MCP\]\s+(\w+)\(")
+_TOOL_RE = re.compile(r"\[(?:MCP|A2A)\]\s+(\w+)\(")
 
 
 def _parse_consumer_tools_from_log(log: list[dict], turn: int) -> list[dict]:
-    """Extract [MCP] tool_name(...) markers from a /chat log and tag each
-    with the turn it fired in. Used by ingest_chat_response."""
+    """Extract [MCP]/[A2A] tool_name(...) markers from a /chat log and tag
+    each with the turn it fired in. Used by ingest_chat_response."""
     out = []
     for entry in log:
         if entry.get("from") != "consumer":
             continue
-        m = _MCP_RE.search(entry.get("message", ""))
+        m = _TOOL_RE.search(entry.get("message", ""))
         if m:
             out.append({"tool": m.group(1), "turn": turn})
     return out
@@ -191,12 +190,29 @@ def _render_tool_row(name: str, tag: str, ambient: bool, status: str) -> str:
     )
 
 
+def _bubble_tag(sender: str, msg: str) -> str:
+    """Classify a wire bubble: 'a2a', 'mcp_local', or 'narrative'.
+
+    Provider replies are always A2A (they came over HTTP from the provider).
+    Consumer entries with [A2A] are outbound A2A calls, [MCP] are local-only,
+    everything else is narrative ('Chose small...', 'On-chain verification OK').
+    """
+    if sender == "provider":
+        return "a2a"
+    if msg.startswith("[A2A]"):
+        return "a2a"
+    if msg.startswith("[MCP]"):
+        return "mcp_local"
+    return "narrative"
+
+
 def _parse_timeline(log: list[dict], turn: int) -> list[dict]:
     """Convert /chat log entries into A2A wire bubbles + on-chain markers.
 
-    Returns a list of {kind, sender, text, turn} where:
-      kind = 'bubble' or 'chain'
+    Returns a list of {kind, sender, text, tag, turn} where:
+      kind   = 'bubble' or 'chain'
       sender = 'consumer' or 'provider' (only meaningful for bubbles)
+      tag    = 'a2a' | 'mcp_local' | 'narrative' (only meaningful for bubbles)
     """
     out: list[dict] = []
     for e in log:
@@ -209,7 +225,8 @@ def _parse_timeline(log: list[dict], turn: int) -> list[dict]:
         elif "Agreement ACTIVE" in msg:
             out.append({"kind": "chain", "text": f"⛓ {msg}", "turn": turn})
         elif sender in ("consumer", "provider"):
-            out.append({"kind": "bubble", "sender": sender, "text": msg, "turn": turn})
+            out.append({"kind": "bubble", "sender": sender, "text": msg,
+                        "tag": _bubble_tag(sender, msg), "turn": turn})
     return out
 
 
@@ -225,6 +242,13 @@ def _merge_timeline(existing: list[dict], new_items: list[dict]) -> list[dict]:
 
 
 def render_wire_panel() -> None:
+    # Visual contract:
+    #   A2A bubbles (over-the-wire JSON-RPC) get a green wire accent + an
+    #   A2A→ / ←A2A header so the actual agent-to-agent traffic is obvious.
+    #   MCP-local consumer entries (lock_payment, await_settlement,
+    #   verify_credential) get a muted indigo and an MCP·local header so
+    #   they read as "consumer talking to itself / the chain".
+    #   Narrative consumer lines (the LLM's "Chose small..." etc) are plain.
     bubbles_html = []
     for item in st.session_state.timeline:
         if item["kind"] == "chain":
@@ -234,29 +258,40 @@ def render_wire_panel() -> None:
             )
             continue
         sender = item["sender"]
+        tag = item.get("tag", "narrative")
         text = html_lib.escape(item["text"])
         if sender == "consumer":
+            if tag == "a2a":
+                header = "consumer →[A2A]"
+                bg, border, accent, color = "#0f1f1a", "#1f3a30", "#34d399", "#a7e8c4"
+            elif tag == "mcp_local":
+                header = "consumer ⟲ [MCP·local]"
+                bg, border, accent, color = "#1a1a2e", "#2a2a4e", "#818cf8", "#d4d8ff"
+            else:
+                header = "consumer"
+                bg, border, accent, color = "#15151f", "#23233a", "#666", "#bbb"
             bubbles_html.append(
-                f'<div style="align-self:flex-start;background:#1a1a2e;'
-                f'border:1px solid #2a2a4e;border-left:3px solid #818cf8;'
-                f'border-radius:8px;padding:6px 9px;font-size:10px;color:#d4d8ff;'
+                f'<div style="align-self:flex-start;background:{bg};'
+                f'border:1px solid {border};border-left:3px solid {accent};'
+                f'border-radius:8px;padding:6px 9px;font-size:10px;color:{color};'
                 f'max-width:88%;font-family:ui-monospace,monospace;line-height:1.4;'
                 f'word-break:break-word;">'
                 f'<div style="font-size:8px;letter-spacing:0.4px;text-transform:uppercase;'
-                f'opacity:0.7;margin-bottom:2px;">consumer →</div>{text}</div>'
+                f'opacity:0.7;margin-bottom:2px;">{header}</div>{text}</div>'
             )
         else:
             bubbles_html.append(
-                f'<div style="align-self:flex-end;background:#1a2535;'
-                f'border:1px solid #2a3545;border-right:3px solid #60a5fa;'
-                f'border-radius:8px;padding:6px 9px;font-size:10px;color:#d4e4ff;'
+                f'<div style="align-self:flex-end;background:#0f1f1a;'
+                f'border:1px solid #1f3a30;border-right:3px solid #34d399;'
+                f'border-radius:8px;padding:6px 9px;font-size:10px;color:#a7e8c4;'
                 f'max-width:88%;font-family:ui-monospace,monospace;line-height:1.4;'
                 f'text-align:right;word-break:break-word;">'
                 f'<div style="font-size:8px;letter-spacing:0.4px;text-transform:uppercase;'
-                f'opacity:0.7;margin-bottom:2px;">← provider</div>{text}</div>'
+                f'opacity:0.7;margin-bottom:2px;">[A2A]← provider</div>{text}</div>'
             )
 
-    bubbles_count = sum(1 for i in st.session_state.timeline if i["kind"] == "bubble")
+    bubbles_count = sum(1 for i in st.session_state.timeline
+                        if i["kind"] == "bubble" and i.get("tag") == "a2a")
     body = ("".join(bubbles_html)
             if st.session_state.timeline
             else '<div style="color:var(--text-faint);font-size:11px;">No agent-to-agent traffic yet — type intent into the chat below.</div>')

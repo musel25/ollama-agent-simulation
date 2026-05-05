@@ -21,15 +21,22 @@ from langgraph.graph import END, START, StateGraph
 from consumer.mcp_server import (
     await_settlement as _await_settlement_tool,
     browse_catalog as _browse_catalog_tool,
+    discover_provider as _discover_provider_tool,
     lock_payment as _lock_payment_tool,
     present_credential as _present_credential_tool,
     request_quote as _request_quote_tool,
+    verify_credential as _verify_credential_tool,
 )
+
+
+REQUIRED_PROVIDER_SKILLS = ("get_catalog", "request_quote", "activate")
 
 
 class WorkflowState(TypedDict, total=False):
     user_message: str
     provider_url: str
+    provider_urls: list[str]
+    offers: list[dict]
     model: str
     catalog: list[dict]
     chosen_tier: str
@@ -39,16 +46,26 @@ class WorkflowState(TypedDict, total=False):
     token_id: int
     settle_attempts: int
     activation: dict
+    on_chain_verification: dict
     final_response: str
     log: list[dict]
     thinking: list[str]
     error: str | None
 
 
+# Tools whose execution traverses HTTP to the provider (A2A wire), as opposed
+# to purely local MCP tools that hit the chain or read local state. Used to
+# tag log entries so the UI can distinguish A2A from local MCP.
+_A2A_TOOLS = frozenset({
+    "discover_provider", "browse_catalog", "request_quote", "present_credential",
+})
+
+
 def _log_call(state: WorkflowState, tool_name: str, args: dict) -> None:
+    prefix = "[A2A]" if tool_name in _A2A_TOOLS else "[MCP]"
     state.setdefault("log", []).append({
         "from": "consumer",
-        "message": f"[MCP] {tool_name}({json.dumps(args)})",
+        "message": f"{prefix} {tool_name}({json.dumps(args)})",
     })
 
 
@@ -111,18 +128,73 @@ def _deterministic_tier_pick(user_message: str, catalog: list[dict]) -> dict:
     return ranked[len(ranked) // 2]  # default: middle
 
 
+async def discover_node(state: WorkflowState) -> dict:
+    """Fetch each provider's agent card in parallel and keep only those that
+    advertise the required skills. Populates state['provider_urls']."""
+    urls = state.get("provider_urls") or [state["provider_url"]]
+    raws = await asyncio.gather(*(_discover_provider_tool(u) for u in urls))
+
+    surviving: list[str] = []
+    for url, raw in zip(urls, raws):
+        _log_call(state, "discover_provider", {"provider_url": url})
+        _log_result(state, "provider", raw)
+        if raw.startswith("ERROR"):
+            continue
+        try:
+            card = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        skills = set(card.get("skills") or [])
+        missing = set(REQUIRED_PROVIDER_SKILLS) - skills
+        if missing:
+            state["log"].append({
+                "from": "consumer",
+                "message": f"Skipping {url}: missing skills {missing}",
+            })
+            continue
+        surviving.append(url)
+
+    if not surviving:
+        return {"log": state["log"],
+                "error": "no providers advertise the required skills"}
+
+    return {
+        "log": state["log"],
+        "provider_urls": surviving,
+        "provider_url": surviving[0],
+    }
+
+
 async def browse_node(state: WorkflowState) -> dict:
-    args = {"provider_url": state["provider_url"]}
-    _log_call(state, "browse_catalog", args)
-    raw = await _browse_catalog_tool(state["provider_url"])
-    _log_result(state, "provider", raw)
-    if raw.startswith("ERROR"):
-        return {"log": state["log"], "error": raw}
-    try:
-        catalog = json.loads(raw)
-    except json.JSONDecodeError as e:
-        return {"log": state["log"], "error": f"could not parse catalog: {e}"}
-    return {"log": state["log"], "catalog": catalog}
+    """Fan out browse_catalog across surviving providers in parallel; collect a
+    flat list of offers tagged with their provider_url. The deduped `catalog`
+    (cheapest offer per packageId) is what the LLM tier picker sees."""
+    urls = state.get("provider_urls") or [state["provider_url"]]
+    raws = await asyncio.gather(*(_browse_catalog_tool(u) for u in urls))
+
+    offers: list[dict] = []
+    for url, raw in zip(urls, raws):
+        _log_call(state, "browse_catalog", {"provider_url": url})
+        _log_result(state, "provider", raw)
+        if raw.startswith("ERROR"):
+            continue
+        try:
+            tiers = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        offers.extend({**tier, "provider_url": url} for tier in tiers)
+
+    if not offers:
+        return {"log": state["log"],
+                "error": "no offers returned from any discovered provider"}
+
+    by_pkg: dict[str, dict] = {}
+    for o in offers:
+        prev = by_pkg.get(o["packageId"])
+        if prev is None or o["priceWei"] < prev["priceWei"]:
+            by_pkg[o["packageId"]] = o
+
+    return {"log": state["log"], "offers": offers, "catalog": list(by_pkg.values())}
 
 
 async def pick_tier_node(state: WorkflowState) -> dict:
@@ -151,10 +223,21 @@ async def pick_tier_node(state: WorkflowState) -> dict:
     if chosen is None:
         chosen = _deterministic_tier_pick(state["user_message"], catalog)
 
+    offers = state.get("offers") or [chosen]
+    matching = [o for o in offers if o["packageId"] == chosen["packageId"]]
+    best = min(matching, key=lambda o: o["priceWei"])
+    chosen_url = best.get("provider_url") or state.get("provider_url", "")
+
+    msg = (f"Chose {best['packageId']} ({best['mbps']} Mbps) from "
+           f"{chosen_url} at {best['priceWei']} wei")
+    state.setdefault("log", []).append({"from": "consumer", "message": msg})
+
     return {
-        "chosen_tier": chosen["packageId"],
-        "chosen_mbps": chosen["mbps"],
+        "chosen_tier": best["packageId"],
+        "chosen_mbps": best["mbps"],
+        "provider_url": chosen_url,
         "thinking": state["thinking"],
+        "log": state["log"],
     }
 
 
@@ -248,6 +331,39 @@ async def present_node(state: WorkflowState) -> dict:
     return {"log": state["log"], "activation": activation}
 
 
+async def verify_node(state: WorkflowState) -> dict:
+    """Independent on-chain check: confirm the NFT grants what the quote promised.
+    Reads chain directly — does not trust the provider's activate response.
+    """
+    args = {"token_id": state["token_id"]}
+    _log_call(state, "verify_credential", args)
+    raw = await asyncio.to_thread(_verify_credential_tool, state["token_id"])
+    _log_result(state, "consumer", raw)
+    if raw.startswith("ERROR"):
+        return {"log": state["log"], "error": raw}
+    try:
+        verified = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return {"log": state["log"], "error": f"could not parse verification: {e}"}
+
+    expected_mbps = int(state["chosen_mbps"])
+    if int(verified["mbps"]) != expected_mbps:
+        return {"log": state["log"], "on_chain_verification": verified,
+                "error": (f"on-chain mbps mismatch: NFT grants {verified['mbps']} "
+                          f"but quote promised {expected_mbps}")}
+    if not verified.get("ownerIsConsumer"):
+        return {"log": state["log"], "on_chain_verification": verified,
+                "error": f"NFT not owned by consumer (owner={verified.get('owner')})"}
+
+    state["log"].append({
+        "from": "consumer",
+        "message": (f"On-chain verification OK: tokenId={state['token_id']} "
+                    f"grants {verified['mbps']} Mbps for "
+                    f"{verified['secondsRemaining']}s (endpoint={verified['endpoint']})"),
+    })
+    return {"log": state["log"], "on_chain_verification": verified}
+
+
 async def summary_node(state: WorkflowState) -> dict:
     # Always return a deterministic, factually-correct sentence. We still call
     # the LLM (for observability / future prose flavor) but never use its
@@ -288,22 +404,26 @@ def _route_after(next_node: str):
 
 def build_graph():
     builder = StateGraph(WorkflowState)
+    builder.add_node("discover_node", discover_node)
     builder.add_node("browse_node", browse_node)
     builder.add_node("pick_tier_node", pick_tier_node)
     builder.add_node("quote_node", quote_node)
     builder.add_node("lock_node", lock_node)
     builder.add_node("settle_node", settle_node)
     builder.add_node("present_node", present_node)
+    builder.add_node("verify_node", verify_node)
     builder.add_node("summary_node", summary_node)
     builder.add_node("error_node", error_node)
 
-    builder.add_edge(START, "browse_node")
+    builder.add_edge(START, "discover_node")
+    builder.add_conditional_edges("discover_node", _route_after("browse_node"))
     builder.add_conditional_edges("browse_node", _route_after("pick_tier_node"))
     builder.add_conditional_edges("pick_tier_node", _route_after("quote_node"))
     builder.add_conditional_edges("quote_node", _route_after("lock_node"))
     builder.add_conditional_edges("lock_node", _route_after("settle_node"))
     builder.add_conditional_edges("settle_node", _settle_route)
-    builder.add_conditional_edges("present_node", _route_after("summary_node"))
+    builder.add_conditional_edges("present_node", _route_after("verify_node"))
+    builder.add_conditional_edges("verify_node", _route_after("summary_node"))
     builder.add_edge("summary_node", END)
     builder.add_edge("error_node", END)
     return builder.compile()

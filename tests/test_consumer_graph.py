@@ -23,8 +23,9 @@ async def test_browse_node_populates_catalog(monkeypatch, fake_catalog):
     state = {"provider_url": "http://provider:8002", "log": []}
     out = await g.browse_node(state)
 
-    assert out["catalog"] == fake_catalog
-    assert any("[MCP] browse_catalog" in e["message"] for e in out["log"])
+    assert {p["packageId"] for p in out["catalog"]} == {"small", "medium", "large"}
+    assert all(o["provider_url"] == "http://provider:8002" for o in out["offers"])
+    assert any("[A2A] browse_catalog" in e["message"] for e in out["log"])
     assert any(e["from"] == "provider" for e in out["log"])
     assert "error" not in out
 
@@ -37,7 +38,33 @@ async def test_browse_node_handles_error(monkeypatch):
 
     out = await g.browse_node({"provider_url": "http://x", "log": []})
     assert out["error"]
-    assert "provider unreachable" in out["error"]
+    assert "no offers returned" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_browse_node_fans_out_and_picks_cheapest_per_tier(monkeypatch):
+    async def fake_browse(provider_url):
+        if "p1" in provider_url:
+            return json.dumps([
+                {"packageId": "small",  "mbps": 2.0, "durationSeconds": 600,
+                 "priceWei": 10**16, "availableSlots": 1},
+            ])
+        return json.dumps([
+            {"packageId": "small",  "mbps": 2.0, "durationSeconds": 600,
+             "priceWei": 5 * 10**15, "availableSlots": 1},
+        ])
+    monkeypatch.setattr(g, "_browse_catalog_tool", fake_browse)
+
+    out = await g.browse_node({
+        "provider_url": "http://p1:8002",
+        "provider_urls": ["http://p1:8002", "http://p2:8002"],
+        "log": [],
+    })
+    assert len(out["offers"]) == 2
+    assert len(out["catalog"]) == 1
+    # Cheapest small wins
+    assert out["catalog"][0]["provider_url"] == "http://p2:8002"
+    assert out["catalog"][0]["priceWei"] == 5 * 10**15
 
 
 @pytest.mark.asyncio
@@ -102,7 +129,7 @@ async def test_quote_node(monkeypatch):
         "log": [],
     })
     assert out["agreement_id"] == "12345"
-    assert any("[MCP] request_quote" in e["message"] for e in out["log"])
+    assert any("[A2A] request_quote" in e["message"] for e in out["log"])
 
 
 @pytest.mark.asyncio
@@ -253,15 +280,27 @@ async def test_full_graph_happy_path(monkeypatch, fake_catalog):
         return "OK tokenId=99"
     async def fake_present(url, tid):
         return json.dumps({"status": "active", "bandwidthMbps": 5.0, "tokenId": tid})
+    def fake_verify(tid):
+        return json.dumps({
+            "ok": True, "owner": "0xConsumer", "ownerIsConsumer": True,
+            "agreementId": 777, "mbps": 5, "durationSeconds": 600,
+            "secondsRemaining": 600, "endpoint": "clab://pe1/eth-1.100",
+        })
     async def fake_llm(prompt, model):
         return "medium" if "Reply with EXACTLY ONE WORD" in prompt else \
                "OK: medium (5 Mbps), agreementId=777, tokenId=99."
 
+    async def fake_discover(url):
+        return json.dumps({"name": "Provider", "version": "2",
+                           "skills": ["get_catalog", "request_quote", "activate"]})
+
+    monkeypatch.setattr(g, "_discover_provider_tool", fake_discover)
     monkeypatch.setattr(g, "_browse_catalog_tool", fake_browse)
     monkeypatch.setattr(g, "_request_quote_tool", fake_quote)
     monkeypatch.setattr(g, "_lock_payment_tool", fake_lock)
     monkeypatch.setattr(g, "_await_settlement_tool", fake_settle)
     monkeypatch.setattr(g, "_present_credential_tool", fake_present)
+    monkeypatch.setattr(g, "_verify_credential_tool", fake_verify)
     monkeypatch.setattr(g, "_llm_complete", fake_llm)
 
     graph = g.build_graph()
@@ -275,4 +314,66 @@ async def test_full_graph_happy_path(monkeypatch, fake_catalog):
     assert result["agreement_id"] == "777"
     assert result["token_id"] == 99
     assert result["activation"]["status"] == "active"
+    assert result["on_chain_verification"]["mbps"] == 5
+    assert result["on_chain_verification"]["ownerIsConsumer"] is True
     assert "777" in result["final_response"]
+
+
+@pytest.mark.asyncio
+async def test_discover_node_filters_providers_missing_skills(monkeypatch):
+    async def fake_discover(url):
+        if "good" in url:
+            return json.dumps({"name": "ok", "version": "1",
+                               "skills": ["get_catalog", "request_quote", "activate"]})
+        return json.dumps({"name": "bad", "version": "1", "skills": ["get_catalog"]})
+    monkeypatch.setattr(g, "_discover_provider_tool", fake_discover)
+
+    out = await g.discover_node({
+        "provider_url": "http://good:8002",
+        "provider_urls": ["http://bad:8002", "http://good:8002"],
+        "log": [],
+    })
+    assert out["provider_urls"] == ["http://good:8002"]
+    assert out["provider_url"] == "http://good:8002"
+
+
+@pytest.mark.asyncio
+async def test_discover_node_errors_when_no_providers_match(monkeypatch):
+    async def fake_discover(url):
+        return json.dumps({"name": "bad", "version": "1", "skills": []})
+    monkeypatch.setattr(g, "_discover_provider_tool", fake_discover)
+
+    out = await g.discover_node({
+        "provider_urls": ["http://x:8002"], "provider_url": "http://x:8002", "log": [],
+    })
+    assert "no providers" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_verify_node_detects_mbps_mismatch(monkeypatch):
+    def fake_verify(tid):
+        return json.dumps({
+            "ok": True, "owner": "0xConsumer", "ownerIsConsumer": True,
+            "agreementId": 1, "mbps": 1, "durationSeconds": 600,
+            "secondsRemaining": 600, "endpoint": "clab://pe/eth",
+        })
+    monkeypatch.setattr(g, "_verify_credential_tool", fake_verify)
+
+    out = await g.verify_node({"token_id": 7, "chosen_mbps": 5.0, "log": []})
+    assert "error" in out
+    assert "mbps mismatch" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_verify_node_rejects_wrong_owner(monkeypatch):
+    def fake_verify(tid):
+        return json.dumps({
+            "ok": True, "owner": "0xOther", "ownerIsConsumer": False,
+            "agreementId": 1, "mbps": 5, "durationSeconds": 600,
+            "secondsRemaining": 600, "endpoint": "clab://pe/eth",
+        })
+    monkeypatch.setattr(g, "_verify_credential_tool", fake_verify)
+
+    out = await g.verify_node({"token_id": 7, "chosen_mbps": 5.0, "log": []})
+    assert "error" in out
+    assert "not owned" in out["error"]

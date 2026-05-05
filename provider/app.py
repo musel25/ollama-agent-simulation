@@ -174,12 +174,14 @@ def agent_card_legacy() -> dict:
     return _AGENT_CARD_JSON
 
 
-@app.get("/catalog")
+# /catalog and /quote are debug-only mirrors of the A2A skills. Inter-agent
+# traffic must go over A2A so the agent card / skill schema stays the contract.
+@app.get("/_debug/catalog")
 def get_catalog() -> list[dict]:
     return get_catalog_with_availability()
 
 
-@app.post("/quote")
+@app.post("/_debug/quote")
 def request_quote(req: QuoteRequest) -> dict:
     quote = make_quote(req.packageId, req.consumerAddress)
     if quote is None:

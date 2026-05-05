@@ -42,7 +42,7 @@ services:
       timeout: 10s
       retries: 30
 
-  ollama-pull-3b:
+  ollama-pull:
     image: ollama/ollama:latest
     depends_on:
       ollama:
@@ -51,19 +51,7 @@ services:
       - OLLAMA_HOST=http://ollama:11434
     volumes:
       - ollama:/root/.ollama
-    entrypoint: ["ollama", "pull", "llama3.2:3b"]
-    restart: "no"
-
-  ollama-pull-1b:
-    image: ollama/ollama:latest
-    depends_on:
-      ollama:
-        condition: service_healthy
-    environment:
-      - OLLAMA_HOST=http://ollama:11434
-    volumes:
-      - ollama:/root/.ollama
-    entrypoint: ["ollama", "pull", "llama3.2:1b"]
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-llama3.2:3b}"]
     restart: "no"
 
   provider-agent:
@@ -93,9 +81,7 @@ services:
     depends_on:
       provider-agent:
         condition: service_started
-      ollama-pull-3b:
-        condition: service_completed_successfully
-      ollama-pull-1b:
+      ollama-pull:
         condition: service_completed_successfully
     ports:
       - "8001:8001"
@@ -118,9 +104,7 @@ services:
     depends_on:
       provider-agent:
         condition: service_started
-      ollama-pull-3b:
-        condition: service_completed_successfully
-      ollama-pull-1b:
+      ollama-pull:
         condition: service_completed_successfully
     ports:
       - "8011:8001"

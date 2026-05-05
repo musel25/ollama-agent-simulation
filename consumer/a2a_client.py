@@ -31,6 +31,14 @@ def _short_id() -> str:
     return secrets.token_hex(8)
 
 
+async def fetch_agent_card(provider_url: str) -> dict:
+    """Fetch /.well-known/agent-card.json from *provider_url* (used for discovery)."""
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        resp = await http.get(f"{provider_url.rstrip('/')}/.well-known/agent-card.json")
+        resp.raise_for_status()
+        return resp.json()
+
+
 async def send_provider_action(provider_url: str, payload: dict) -> dict:
     """
     Send a single A2A message to *provider_url* with parts[0].data = payload,

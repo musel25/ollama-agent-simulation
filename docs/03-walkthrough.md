@@ -14,7 +14,7 @@ The terminal shows `Services starting... UI at http://localhost:8501`. After 60â
 
 **What happens between components**
 
-Eight services start in dependency order. `anvil` runs first; `deployer` fires once, publishes `BandwidthEscrow` and `BandwidthNFT`, writes their addresses to `contracts/deployments/`, then exits. The three Ollama containers start in parallel: `ollama` serves the inference API, `ollama-pull-3b` and `ollama-pull-1b` each run `ollama pull` and exit once the model layers are cached. `provider-agent` and `consumer-agent` start only after `deployer` has completed successfully; `consumer-ui` starts after the consumer agent.
+Seven services start in dependency order. `anvil` runs first; `deployer` fires once, publishes `BandwidthEscrow` and `BandwidthNFT`, writes their addresses to `contracts/deployments/`, then exits. The Ollama containers start next: `ollama` serves the inference API, and `ollama-pull` runs `ollama pull $OLLAMA_MODEL` and exits once the model layers are cached. `provider-agent` and `consumer-agent` start only after `deployer` has completed successfully; `consumer-ui` starts after the consumer agent.
 
 ```
 docker-compose up

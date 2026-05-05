@@ -9,6 +9,7 @@ import json
 import os
 import traceback
 
+import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastmcp import Client as MCPClient
@@ -56,6 +57,7 @@ async def run_consumer(user_message: str, model: str = DEFAULT_MODEL) -> tuple[s
     initial: dict = {
         "user_message": user_message,
         "provider_url": PROVIDER_A2A_URLS[0],
+        "provider_urls": list(PROVIDER_A2A_URLS),
         "model": model,
         "log": [],
         "thinking": [],
@@ -136,6 +138,62 @@ async def consumer_address_endpoint() -> dict:
     return {"address": result.content[0].text}
 
 
+@app.get("/check_token")
+async def check_token(tokenId: int) -> dict:
+    """UI-facing wrapper around the verify_credential MCP tool.
+
+    Reshapes {ok, owner, mbps, secondsRemaining, endpoint, ...} into the
+    {owner, status, seconds_remaining, bandwidth_mbps, endpoint} the NFT strip
+    expects. Status is derived from secondsRemaining since the consumer can't
+    observe SDN state directly.
+    """
+    async with MCPClient(consumer_mcp) as c:
+        result = await c.call_tool("verify_credential", {"token_id": int(tokenId)})
+        text = result.content[0].text if result.content else ""
+    if text.startswith("ERROR"):
+        raise HTTPException(404, text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise HTTPException(502, f"unparseable verify_credential response: {e}")
+    seconds_remaining = int(data.get("secondsRemaining", 0))
+    return {
+        "owner": data["owner"],
+        "status": "active" if seconds_remaining > 0 else "expired",
+        "seconds_remaining": seconds_remaining,
+        "bandwidth_mbps": float(data["mbps"]),
+        "endpoint": data["endpoint"],
+        "agreementId": str(data.get("agreementId", "")),
+    }
+
+
+class ProbeProxyRequest(BaseModel):
+    tokenId: int
+
+
+@app.post("/probe_proxy")
+async def probe_proxy(req: ProbeProxyRequest) -> dict:
+    """Forward an iperf3 probe to the provider that allocated the slot.
+
+    Picks the first provider from PROVIDER_A2A_URLS — fine for the single-
+    provider demo. The provider's /probe looks up the slot bound to the
+    NFT's agreementId and runs verify_bandwidth (mocked under SDN_MOCK=true).
+    """
+    if not PROVIDER_A2A_URLS:
+        raise HTTPException(500, "no PROVIDER_A2A_URLS configured")
+    target = f"{PROVIDER_A2A_URLS[0]}/probe"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            r = await http.post(target, json={"tokenId": int(req.tokenId)})
+            r.raise_for_status()
+            return r.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(e.response.status_code,
+                            f"provider /probe failed: {e.response.text}")
+    except Exception as e:
+        raise HTTPException(502, f"probe forward failed: {e}")
+
+
 @app.get("/chain_events")
 def chain_events(since_block: int = 0) -> list[dict]:
     """Return escrow + NFT events emitted since `since_block`.
@@ -180,10 +238,18 @@ def chain_events(since_block: int = 0) -> list[dict]:
             })
         return out
 
+    def _gather_named(contract, event_name: str):
+        # Be defensive: if the deployed ABI doesn't have the event,
+        # skip it rather than 500 the whole endpoint.
+        evt = getattr(contract.events, event_name, None)
+        if evt is None:
+            return []
+        return _gather(evt.get_logs, event_name)
+
     events: list[dict] = []
-    events += _gather(escrow.events.AgreementRequested.get_logs, "AgreementRequested")
-    events += _gather(escrow.events.Deposit.get_logs, "Deposit")
-    events += _gather(nft.events.Transfer.get_logs, "Transfer")
+    for name in ("AgreementRequested", "AgreementActive", "AgreementCancelled"):
+        events += _gather_named(escrow, name)
+    events += _gather_named(nft, "Transfer")
     events.sort(key=lambda e: e["block"])
     return events
 

@@ -4,10 +4,11 @@ Consumer agent's MCP server.
 Tools:
   Local (no network):
     - wallet_address()         → consumer EOA
-    - sign_message(text)       → ECDSA hex signature
     - lock_payment(agreement_id)
-    - await_settlement(agreement_id, max_attempts)
+    - await_settlement(agreement_id)
+    - verify_credential(token_id) — independent on-chain check
   A2A-bound (network to provider):
+    - discover_provider(provider_url) — fetch agent card + advertised skills
     - browse_catalog(provider_url)
     - request_quote(provider_url, package_id)
     - present_credential(provider_url, token_id)
@@ -24,9 +25,9 @@ from eth_account.messages import encode_defunct
 from fastmcp import FastMCP
 from web3 import Web3
 
-from consumer.a2a_client import send_provider_action
+from consumer.a2a_client import fetch_agent_card, send_provider_action
 from shared.chain import STATUS_NAMES, send_tx
-from shared.contracts import get_escrow_contract
+from shared.contracts import get_escrow_contract, get_nft_contract
 
 mcp = FastMCP("bandwidth-consumer")
 
@@ -51,15 +52,6 @@ def wallet_address() -> str:
     if _consumer_account is None:
         return "ERROR: CONSUMER_PRIVATE_KEY not set"
     return _consumer_account.address
-
-
-@mcp.tool()
-def sign_message(text: str) -> str:
-    """Sign an arbitrary text with the consumer's EOA. Returns hex signature."""
-    if _consumer_account is None or not _CONSUMER_KEY:
-        return "ERROR: CONSUMER_PRIVATE_KEY not set"
-    msg = encode_defunct(text=text)
-    return Account.sign_message(msg, private_key=_CONSUMER_KEY).signature.hex()
 
 
 @mcp.tool()
@@ -123,6 +115,57 @@ def await_settlement(agreement_id: str) -> str:
             return f"ERROR reading agreement: {e}"
         time.sleep(_SETTLEMENT_POLL_INTERVAL_S)
     return "PENDING"
+
+
+@mcp.tool()
+def verify_credential(token_id: int) -> str:
+    """
+    Independently verify a credential against the chain — does NOT call the provider.
+    Reads NFT.getTokenMetadata(token_id) + ownerOf(token_id) and returns
+    {ok, owner, agreementId, mbps, durationSeconds, secondsRemaining, endpoint}.
+    The consumer can compare this against its accepted quote to confirm the
+    token grants what was promised.
+    """
+    if _consumer_account is None:
+        return "ERROR: CONSUMER_PRIVATE_KEY not set"
+    try:
+        nft = get_nft_contract(_w3)
+        tid = int(token_id)
+        owner = Web3.to_checksum_address(nft.functions.ownerOf(tid).call())
+        agreement_id, mbps, duration, start_time, endpoint = (
+            nft.functions.getTokenMetadata(tid).call()
+        )
+        seconds_remaining = max(0, duration - max(0, int(time.time()) - start_time))
+        return json.dumps({
+            "ok": True,
+            "owner": owner,
+            "ownerIsConsumer": owner == _consumer_account.address,
+            "agreementId": agreement_id,
+            "mbps": mbps,
+            "durationSeconds": duration,
+            "secondsRemaining": seconds_remaining,
+            "endpoint": endpoint,
+        })
+    except Exception as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+async def discover_provider(provider_url: str) -> str:
+    """
+    Fetch the provider's /.well-known/agent-card.json and return the advertised
+    skill ids. Returns JSON {name, version, skills: [skill_id, ...]} or "ERROR ...".
+    """
+    try:
+        card = await fetch_agent_card(provider_url)
+        skills = [s.get("id") for s in card.get("skills", []) if s.get("id")]
+        return json.dumps({
+            "name": card.get("name"),
+            "version": card.get("version"),
+            "skills": skills,
+        })
+    except Exception as e:
+        return f"ERROR: {e}"
 
 
 @mcp.tool()

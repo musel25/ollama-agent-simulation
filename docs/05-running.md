@@ -57,8 +57,10 @@ Verify:
 ollama --version
 ```
 
-**Docker mode:** the `ollama-pull-3b` and `ollama-pull-1b` containers pull
-the models automatically on first `make up`. You do not need to pull manually.
+**Docker mode:** the `ollama-pull` container pulls `$OLLAMA_MODEL` (default
+`llama3.2:3b`) automatically on first `make up`. Only that one model is
+pulled; if you want a different model, either change `OLLAMA_MODEL` in `.env`
+or pull it manually: `docker compose exec ollama ollama pull <name>`.
 
 **Bare-metal mode:** you must pull the model yourself before starting the
 agents:
@@ -67,9 +69,9 @@ agents:
 ollama pull llama3.2:3b
 ```
 
-The default `llama3.2:3b` download is roughly 2.0 GB. The lighter alternative
-`llama3.2:1b` is about 1.3 GB. Either model works — the consumer's LangGraph
-nodes use plain text completion (no tool-calling required).
+The `llama3.2:3b` download is roughly 2.0 GB. The consumer's LangGraph nodes
+use plain text completion (no tool-calling required), so any small chat model
+works — set `OLLAMA_MODEL` accordingly.
 
 ### uv
 
@@ -168,9 +170,9 @@ make up
 ```
 
 This runs `docker compose up --build -d`, which builds all images and starts
-the eight default-profile services in the background. On first run Docker must
-build the images and the `ollama-pull-*` containers must download the models —
-allow five to ten minutes.
+the seven default-profile services in the background. On first run Docker must
+build the images and the `ollama-pull` container must download the model —
+allow three to five minutes.
 
 To stream all service logs while it starts:
 
@@ -189,10 +191,9 @@ The services come up in dependency order:
 1. **anvil** starts and becomes healthy (block-number RPC call succeeds).
 2. **deployer** runs `forge script`, deploys `BandwidthNFT` and
    `BandwidthEscrow`, writes `contracts/deployments/local.json`, then exits 0.
-3. **ollama** starts. **ollama-pull-3b** and **ollama-pull-1b** pull their
-   models and exit 0.
+3. **ollama** starts. **ollama-pull** pulls `$OLLAMA_MODEL` and exits 0.
 4. **provider-agent** starts (waits for deployer to exit 0).
-5. **consumer-agent** starts (waits for provider-agent and both pull jobs).
+5. **consumer-agent** starts (waits for provider-agent and the pull job).
 6. **consumer-ui** starts (waits for consumer-agent).
 
 Check the current state at any time:
@@ -201,9 +202,8 @@ Check the current state at any time:
 docker compose ps
 ```
 
-All services except `deployer`, `ollama-pull-3b`, and `ollama-pull-1b`
-should show `running`. Those three are one-shot and show `exited (0)` when
-successful.
+All services except `deployer` and `ollama-pull` should show `running`.
+Those two are one-shot and show `exited (0)` when successful.
 
 ### Stopping and cleaning up
 
@@ -433,7 +433,8 @@ make down        # stops the Docker Compose services
 
 ## Changing the AI model
 
-The default model is `llama3.2:3b`. To use a different one, set `OLLAMA_MODEL`
+The default model is `llama3.2:3b`. The `ollama-pull` one-shot service auto-pulls
+whatever `$OLLAMA_MODEL` is set to. To use a different one, set `OLLAMA_MODEL`
 before starting the stack:
 
 ```bash
@@ -441,17 +442,12 @@ OLLAMA_MODEL=llama3.2:1b make up
 # or set it permanently in .env
 ```
 
-The Docker Compose stack pre-pulls both `llama3.2:3b` and `llama3.2:1b` via the
-`ollama-pull-3b` and `ollama-pull-1b` one-shot services, so switching
-between those two requires no manual pull.
-
-For any other model, pull it manually first:
+To pull additional models without changing the default (e.g. for ad-hoc testing),
+pull them manually against the running ollama container:
 
 ```bash
-ollama pull <model-name>
+docker compose exec ollama ollama pull <model-name>
 ```
-
-Then set `OLLAMA_MODEL=<model-name>` in `.env` and restart.
 
 **Models tested with this project:**
 
@@ -460,9 +456,8 @@ Then set `OLLAMA_MODEL=<model-name>` in `.env` and restart.
 | `llama3.2:3b` | ~2.0 GB | Default. Best tier-selection accuracy. |
 | `llama3.2:1b` | ~1.3 GB | Faster. Occasionally picks the wrong tier on ambiguous requests. |
 
-The model **must** support tool-calling (function-call API). Models that only
-do text completion will not work — the consumer's LangGraph loop depends on
-the model returning structured tool-call objects.
+The consumer's LangGraph nodes use plain text completion (no tool-calling
+required), so any small chat model works.
 
 ---
 
@@ -508,9 +503,8 @@ Foundry cannot sign the transaction.
 
 ### `ollama pull` fails or times out
 
-**Symptom.** `docker compose logs ollama-pull-3b` (or `ollama-pull-1b`)
-shows a network error, a timeout, or a "429 Too Many Requests" from the
-Ollama model hub.
+**Symptom.** `docker compose logs ollama-pull` shows a network error, a
+timeout, or a "429 Too Many Requests" from the Ollama model hub.
 
 **Cause.** Slow network connectivity or a temporary rate limit from the Ollama
 registry.
@@ -548,13 +542,13 @@ on port 8545 on the host.
 **Symptom.** `make demo` exits immediately with
 `ERROR: consumer agent not running on :8001`.
 
-**Cause.** The consumer container is still waiting for the `ollama-pull-3b`
-and `ollama-pull-1b` jobs to complete, which can take several minutes on
-first run. The container may also have crashed.
+**Cause.** The consumer container is still waiting for the `ollama-pull`
+job to complete, which can take several minutes on first run. The container
+may also have crashed.
 
 **Fix.**
-1. Check whether the pull jobs have finished: `docker compose logs ollama-pull-3b`.
-2. If they are still running, wait and retry.
+1. Check whether the pull job has finished: `docker compose logs ollama-pull`.
+2. If it is still running, wait and retry.
 3. If the consumer container itself is the problem:
    `docker compose logs consumer-agent` will show the startup error.
 

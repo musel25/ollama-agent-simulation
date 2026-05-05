@@ -16,6 +16,75 @@ Architecturally it follows the paper's split:
 
 This is a research prototype accompanying an academic paper.
 
+### 1.1 Per-node tool map
+
+The consumer is a deterministic LangGraph state machine (`consumer/graph.py`). Each node calls **exactly one** MCP tool — three of them tunnel through A2A to the provider's skills, two are LLM-only with no tools, the rest are local/on-chain. The provider's executor (`provider/agent_executor.py`) maps each inbound A2A skill to one or two of its own MCP tools. Mint/swap is reactive, triggered by an on-chain `AgreementRequested` event; expiry-driven revoke and the iperf `/probe` are out-of-band.
+
+```mermaid
+flowchart LR
+  subgraph Consumer["Consumer agent (LangGraph)"]
+    direction TB
+    S([START]) --> D[discover_node]
+    D --> B[browse_node<br/>fan-out across providers]
+    B --> P[pick_tier_node<br/>LLM picks tier;<br/>cheapest provider wins]
+    P --> Q[quote_node]
+    Q --> L[lock_node]
+    L --> ST[settle_node<br/>polls up to 3×]
+    ST --> PR[present_node]
+    PR --> V[verify_node<br/>independent on-chain check]
+    V --> SU[summary_node<br/>LLM only]
+    SU --> E([END])
+
+    D  -. MCP .-> Td[discover_provider]
+    B  -. MCP .-> Tb[browse_catalog]
+    Q  -. MCP .-> Tq[request_quote]
+    L  -. MCP .-> Tl[lock_payment]
+    ST -. MCP .-> Ts[await_settlement]
+    PR -. MCP .-> Tp[present_credential]
+    V  -. MCP .-> Tv[verify_credential]
+  end
+
+  subgraph Provider["Provider agent"]
+    direction TB
+    S1[/A2A skill: get_catalog/]   --> Pc[MCP get_catalog]
+    S2[/A2A skill: request_quote/] --> Pq[MCP request_quote]
+    S3[/A2A skill: activate/]      --> Pv[MCP verify_credential_ownership]
+    S3 --> Pa[MCP allocate_bandwidth]
+
+    EVT(["on-chain event:<br/>AgreementRequested"]) --> Pm[MCP mint_credential]
+    Pm --> Psw[MCP complete_swap]
+
+    EX(["expiry sweep"]) --> Pr[MCP revoke_bandwidth]
+    HP(["HTTP /probe"])  --> Pvb[MCP verify_bandwidth]
+  end
+
+  Td -- /.well-known/<br/>agent-card.json --> Provider
+  Tb -- A2A get_catalog   --> S1
+  Tq -- A2A request_quote --> S2
+  Tp -- A2A activate      --> S3
+
+  Tl  -. chain .-> CHAIN[(BandwidthEscrow<br/>+ BandwidthNFT)]
+  Ts  -. chain .-> CHAIN
+  Tv  -. chain .-> CHAIN
+  Psw -. chain .-> CHAIN
+  Pm  -. chain .-> CHAIN
+  CHAIN --> EVT
+```
+
+Reading the diagram:
+- Solid arrows inside each agent are the LangGraph edges / executor dispatch.
+- Dotted `MCP` arrows are intra-agent tool calls (in-process `Client(mcp)`).
+- `A2A` arrows are inter-agent calls — the only network path between Consumer and Provider for the marketplace flow. The agent-card fetch goes over plain HTTPS, since A2A's spec puts the card at `/.well-known/agent-card.json`.
+- `chain` arrows are Ethereum JSON-RPC against Anvil (the trust anchor).
+
+The LLM only fires at `pick_tier_node` (one-word tier choice) and `summary_node` (cosmetic). Every other branch is deterministic Python — there is no free-form "should I call A2A or MCP next?" decision.
+
+**Marketplace properties this graph gives you:**
+- *Discovery:* `discover_node` fetches each provider's agent card and drops any provider that doesn't advertise the required skills (`get_catalog`, `request_quote`, `activate`). Providers are configured via `PROVIDER_A2A_URLS` (comma-separated).
+- *Cross-provider comparison:* `browse_node` fans out and `pick_tier_node` picks the cheapest provider for the chosen tier, so a cheaper offer wins automatically.
+- *Independent verification:* `verify_node` reads `BandwidthNFT.getTokenMetadata` and `ownerOf` directly — the consumer never has to trust the provider's `activate` response. If the on-chain Mbps doesn't match the accepted quote, or the NFT isn't owned by the consumer's EOA, the workflow errors out.
+- *A2A is the only inter-agent path:* the provider's mirror REST routes for catalog/quote are demoted to `/_debug/catalog` and `/_debug/quote`, leaving A2A skills as the marketplace contract.
+
 ---
 
 ## 2. TECH STACK SUMMARY
@@ -40,7 +109,7 @@ This is a research prototype accompanying an academic paper.
 | OpenZeppelin Contracts | (Foundry lib) | ERC-721 base (`ERC721`, `ERC721Holder`, `Ownable`) |
 | Docker / Docker Compose v2 | — | Container orchestration for the full stack |
 | Ollama (container) | latest | Hosts LLM models locally; serves at :11434 inside Docker |
-| llama3.2:3b / llama3.2:1b | — | Default LLM models; must support tool-calling |
+| llama3.2:3b | — | Default LLM model (auto-pulled by `ollama-pull`); any small chat model works |
 | pytest | ≥9.0.3 | Unit tests |
 | pytest-asyncio | ≥1.3.0 | Async test support |
 

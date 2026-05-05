@@ -9,3 +9,4 @@ contracts/deployments/local.json
 .claude/
 .pytest_cache/
 .venv/
+.solc-cache/

@@ -8,7 +8,6 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 from eth_account import Account
-from eth_account.messages import encode_defunct
 from fastmcp import Client
 
 
@@ -28,16 +27,6 @@ async def test_wallet_address_returns_consumer_eoa():
     async with Client(mcp) as c:
         result = await c.call_tool("wallet_address", {})
         assert result.content[0].text.lower() == CONSUMER_ADDR.lower()
-
-
-@pytest.mark.asyncio
-async def test_sign_message_recoverable():
-    from consumer.mcp_server import mcp
-    async with Client(mcp) as c:
-        result = await c.call_tool("sign_message", {"text": "hello"})
-        sig = result.content[0].text
-        recovered = Account.recover_message(encode_defunct(text="hello"), signature=sig)
-        assert recovered.lower() == CONSUMER_ADDR.lower()
 
 
 @pytest.mark.asyncio
