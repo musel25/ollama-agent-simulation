@@ -1,7 +1,7 @@
 # Dashboard Redesign — Two-Agent Symmetric Layout
 
 **Date:** 2026-05-05
-**Scope:** `consumer/ui.py` (full rewrite). No backend changes required; reuses existing `/chat`, `/log`, `/catalog_proxy`, `/check_token`, `/probe_proxy` endpoints, plus the agent-card and MCP-tool inventories already defined in code.
+**Scope:** `consumer/ui.py` (full rewrite) + small additions to `provider/app.py` and `provider/mcp_server.py` (tool-call logging) and to `consumer/app.py` (cumulative log + new `/chain_events` endpoint). Reuses existing `/chat`, `/catalog_proxy`, `/check_token`, `/probe_proxy`, `/address` endpoints, plus the agent-card and MCP-tool inventories already defined in code.
 
 ---
 
@@ -22,7 +22,7 @@ A separate suggestion (numeric-input "operator" mockup) removed the human chat e
 This dashboard serves two audiences with overlapping needs:
 
 - **Paper / research artifact** — single screenshot must capture every protocol layer (chat → consumer agent + MCP tools → A2A wire → provider agent + MCP tools → on-chain → SDN/NFT). Density beats polish.
-- **Teaching / tutorial** — labels, color-coded zones, and live-firing tool highlighting so a learner can map UI → code.
+- **Teaching / tutorial** — labels, color-coded zones, and per-turn tool-call highlighting (which MCP tools just fired) so a learner can map UI → code.
 
 Live conference demo is **not** a priority; we don't optimize for narration or animation.
 
@@ -30,7 +30,7 @@ Live conference demo is **not** a priority; we don't optimize for narration or a
 
 ## Approach: two-agent symmetric layout
 
-The two agents face each other across a central "A2A wire." Each agent gets a panel that surfaces its **Agent Card** (identity + skills) and its **MCP tools** (status-tagged, with live highlighting on the firing tool). Human chat sits below the consumer panel; on-chain events sit below the wire. NFT credential + SDN rule status spans the bottom.
+The two agents face each other across a central "A2A wire." Each agent gets a panel that surfaces its **Agent Card** (identity + skills) and its **MCP tools** (status-tagged: `not yet fired` / `fired this turn` / `fired previously`). Human chat sits below the consumer panel; on-chain events sit below the wire. NFT credential + SDN rule status spans the bottom.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -65,7 +65,7 @@ Sidebar keeps the Ollama model selector and the "Clear session" button. Gateway-
 
 - Title: `A2A Bandwidth Provisioning — autonomous agent demo`
 - Subtitle: brief one-liner with project framing (Orange Labs · MCP-driven · atomic on-chain swap · SDN)
-- Status pill (right): `IDLE` / `ACTIVE · turn N` / `COMPLETE` derived from `st.session_state.timeline`
+- Status pill (right): one of `IDLE` (no turns yet) / `BUSY · turn N` (a `/chat` call is in flight; Streamlit shows the spinner) / `READY · turn N` (last turn completed). Derived from `st.session_state.turn` and a `running` flag set around the `httpx.post` call. There is no real-time mid-turn streaming — Streamlit's request/response model means the pill only flips once per turn.
 
 ### 2. Pipeline strip — 6 stages
 
@@ -99,21 +99,25 @@ Single panel with three sub-sections:
 
 **A2A Skills** — chip row of `agent_card.skills[].name` (just `purchase_bandwidth`).
 
-**MCP Tools** — vertical list. Each tool row: tool name + tag (`a2a` / `on-chain` / `local`) + status indicator. Status comes from a new MCP-tool-call log emitted by `consumer/app.py` (see *Data the UI needs that the backend doesn't provide today*). States:
-- `idle` — gray
-- `firing` — blue glow + "fire" border
-- `done` — green checkmark
+**MCP Tools** — vertical list. Each tool row: tool name + tag (`a2a` / `on-chain` / `local`) + status indicator. Streamlit's `/chat` is fully request/response (the LangGraph runs to completion before returning), so there is no real "live firing" state. Statuses are turn-relative:
+- `not yet fired` — gray, never seen in the inter-agent log
+- `fired this turn` — blue accent + green checkmark, last turn it appeared in equals `st.session_state.turn`
+- `fired previously` — dim green checkmark, fired in an earlier turn
+
+The consumer-side log already contains `[MCP] tool_name(...)` markers (emitted by `consumer/graph.py:_log_call`), so no backend changes are needed for the consumer panel — the UI just parses those markers and tags them with the current turn.
 
 Tool list (from `consumer/mcp_server.py`):
-| Tool | Tag |
-|---|---|
-| `wallet_address` | local |
-| `sign_message` | local |
-| `browse_catalog` | a2a |
-| `request_quote` | a2a |
-| `lock_payment` | on-chain |
-| `await_settlement` | on-chain |
-| `present_credential` | a2a |
+| Tool | Tag | Notes |
+|---|---|---|
+| `browse_catalog` | a2a | fires from `browse_node` and `catalog_info_node` |
+| `request_quote` | a2a | fires from `quote_node` |
+| `lock_payment` | on-chain | fires from `lock_node` |
+| `await_settlement` | on-chain | fires from `settle_node` |
+| `present_credential` | a2a | fires from `present_node` |
+| `wallet_address` | local | **ambient** — used by `/address` endpoint and inside other tools, never as a graph-driven MCP call. Shown for completeness, never lights up via chat. |
+| `sign_message` | local | **ambient** — `present_credential` signs inline rather than calling this tool. Shown for completeness. |
+
+The "ambient" tools render with a dotted border and a small "ambient" tag so users understand they exist but don't fire in the buy flow.
 
 #### 3b. A2A wire (center)
 
@@ -134,16 +138,16 @@ Mirror of 3a, pulling from `build_provider_agent_card()`.
 **A2A Skills**: `get_catalog`, `request_quote`, `activate`.
 
 **MCP Tools** (from `provider/mcp_server.py`):
-| Tool | Tag |
-|---|---|
-| `get_catalog` | read |
-| `request_quote` | read |
-| `verify_credential_ownership` | read |
-| `mint_credential` | on-chain |
-| `complete_swap` | on-chain |
-| `allocate_bandwidth` | sdn |
-| `revoke_bandwidth` | sdn |
-| `verify_bandwidth` | sdn |
+| Tool | Tag | Notes |
+|---|---|---|
+| `get_catalog` | read | fires via A2A `BandwidthProviderExecutor._handle_catalog` |
+| `request_quote` | read | fires via A2A `BandwidthProviderExecutor._handle_quote` |
+| `verify_credential_ownership` | read | fires via A2A `BandwidthProviderExecutor._handle_activate` |
+| `mint_credential` | on-chain | fires from event listener `_handle_agreement` after `AgreementRequested` |
+| `complete_swap` | on-chain | fires from event listener `_handle_agreement` |
+| `allocate_bandwidth` | sdn | fires via A2A `_handle_activate` |
+| `verify_bandwidth` | sdn | fires from `/probe` endpoint |
+| `revoke_bandwidth` | sdn | **expiry-driven** — fires only from `provider/expiry.py:expiry_sweep_loop`, never in the buy flow. Shown with dotted border + `expiry` tag. |
 
 Provider-side MCP-tool firing status requires the provider to emit tool-call events (see *Data the UI needs that the backend doesn't provide today*, item 1).
 
@@ -153,9 +157,11 @@ Same `st.chat_input` and `st.chat_message` calls as today. Wrapped in a panel wi
 
 ### 5. On-chain Events panel (bottom-right)
 
-Replaces the current "chain" bubble interleaving. New view: monospace event list with one row per blockchain event, columns `event name · args · gas · block`. Events parsed by extending `_parse_log_to_phases` to also extract a flat list of chain-named events (already partially derivable from existing log strings like `"requestAgreement() sent."`).
+Replaces the current "chain" bubble interleaving. New view: monospace event list with one row per blockchain event, columns `event name · args · gas · block`.
 
-If the existing log isn't structured enough, we add a new `/chain_events` endpoint to `consumer/app.py` that polls Anvil for events emitted by the escrow + NFT contracts since session start. Decision: **start with parsing the existing log**; add `/chain_events` only if parsing turns out lossy.
+**Source of truth:** the inter-agent log carries hints (`requestAgreement() sent. tx=…`, `Agreement ACTIVE. tokenId=…`) but lacks gas, block number, and the `Deposit` event entirely. Add a small `GET /chain_events?since_block=N` endpoint to `consumer/app.py` that uses `escrow.events.AgreementRequested.get_logs` + `escrow.events.Deposit.get_logs` + `nft.events.Transfer.get_logs` (all already exposed via `shared.contracts`). Returns `[{event, args, gas, block, txHash}]`. The dashboard polls this once after each chat turn returns and merges into `st.session_state.chain_events` (cumulative across turns; never reset until "Clear session").
+
+**Cumulative state — important.** `inter_agent_log` is cleared at the top of every `/chat` call (`consumer/app.py:run_consumer`), so anything sourced from it must be accumulated client-side in `st.session_state`. The existing `_merge_timeline` already does this for the A2A wire; we add `chain_events` next to it.
 
 ### 6. NFT credential & SDN rule strip (full-width)
 
@@ -171,15 +177,42 @@ Same as today but only rendered if `st.session_state.probe_samples` is non-empty
 
 ## Data the UI needs that the backend doesn't provide today
 
-Three new pieces:
+Three pieces (one is bigger than I first estimated, two are trivial).
 
-1. **MCP tool-call event stream.** Today the inter-agent log captures `[MCP] tool_name(...)` strings on the consumer side, but provider-side tool calls are invisible (the provider's MCP server fires inside its own process). Add: provider-side log emission so each `@mcp.tool` invocation is logged to a shared file or in-process buffer that `consumer/app.py` aggregates and exposes via `/log`. The consumer-side log already contains MCP markers — we just need to parse them more strictly into `{tool, agent, status, ts}` records.
+### 1. Provider-side MCP tool-call log — bigger than expected
 
-2. **Provider wallet address.** Add a `GET /address` route to `provider/app.py` (mirrors the consumer's existing one) that returns `_provider_account.address`.
+The provider fires 6 of its 8 MCP tools during a buy turn, across two execution paths:
+- **A2A path** (`BandwidthProviderExecutor`): `get_catalog`, `request_quote`, `verify_credential_ownership`, `allocate_bandwidth`
+- **Event-listener path** (`provider/app.py:_handle_agreement`): `mint_credential`, `complete_swap`
+- **`/probe` path**: `verify_bandwidth`
+- **Expiry path** (out of scope): `revoke_bandwidth`
 
-3. **Provider SDN status.** Optional: add `GET /status` returning `{sdn_mock: bool, srl_available: bool}`. If we skip this, the panel reads the value from a Streamlit env var — fine for v1.
+None of these emit anything visible to the consumer's `/log`. Plan:
 
-Items 2 and 3 are small additions. Item 1 is the biggest backend touch: it requires a logging shim around the FastMCP server in `provider/mcp_server.py` so tool calls show up in the inter-agent log alongside A2A messages.
+a. **Add a small in-process deque** in `provider/app.py` (e.g. `tool_call_log: deque = deque(maxlen=500)`) that stores `{tool, ts, args_summary, status}` entries.
+
+b. **Wrap each `@mcp.tool` definition in `provider/mcp_server.py`** (or — simpler — override `mcp.tool()` to install a logging hook). Each invocation appends one entry on entry and updates the same entry on return. FastMCP exposes a single `Client(mcp).call_tool(...)` path so all four invocation sites flow through the same hook.
+
+c. **Add `GET /tool_log` to `provider/app.py`** returning the deque as JSON. Optional `?since_ts=…` query param for incremental polling.
+
+d. **Dashboard polls `provider:8002/tool_log`** once after each chat turn returns (NOT during — the spinner is already covering the user-visible window). Note timing nuance: `mint_credential` and `complete_swap` fire from the async event listener and may complete a few hundred ms after `await_settlement` returns OK on the consumer side. Since `await_settlement` only returns OK once `complete_swap` has landed and the agreement is `ACTIVE`, by the time `/chat` returns those tools have always already fired. So a single post-chat poll is sufficient.
+
+e. **Dashboard merges provider tool log into `st.session_state.provider_tool_log`** with the same per-turn cumulative pattern as the consumer log.
+
+### 2. Cumulative consumer log
+
+`consumer/app.py:run_consumer` calls `inter_agent_log.clear()` at the top of every chat turn. The UI already side-steps this for the A2A wire by accumulating into `st.session_state.timeline`. We extend the same pattern to:
+- `st.session_state.consumer_tool_log` — parsed `[MCP] tool_name(...)` markers
+- `st.session_state.provider_tool_log` — from `/tool_log`
+- `st.session_state.chain_events` — from `/chain_events` (see §5)
+
+No backend change required for this — purely a UI accumulator.
+
+### 3. Provider SDN status (trivial)
+
+Optional `GET /status` returning `{sdn_mock: bool, srl_available: bool}`. If we skip it, the panel reads `SDN_MOCK` from the env on the dashboard side via `os.environ.get`. **Decision: skip the endpoint, read the env var.** One less surface to maintain.
+
+Note: provider `/address` is already implemented (`provider/app.py:195`); my earlier draft incorrectly listed it as a needed addition.
 
 ---
 
@@ -199,14 +232,16 @@ Items 2 and 3 are small additions. Item 1 is the biggest backend touch: it requi
 - A2A wire / activation: green `#34d399`
 - On-chain / blockchain: amber `#f59e0b`
 - Done / success: green `#22c55e`
-- Active / firing: blue `#3b82f6`
-- Pending / idle: gray `#555`
+- Fired this turn: blue `#3b82f6`
+- Not yet fired / pending: gray `#555`
+- Ambient (defined but not in buy flow): dotted gray border
 - Background: `#0d0d12` (page) / `#13131c` (panels)
 
 ## Out of scope
 
-- Animations or transitions on tool firing (just a static "fire" border + glow).
+- Animations or transitions on tool firing (just a static accent border on tools that fired this turn).
 - Real-time push updates from the backend; we keep request/response + `st.rerun()`.
+- Streaming the LangGraph state mid-turn back to the UI. The graph runs to completion inside `/chat`, then returns. If we ever want true mid-turn highlighting we'd need SSE or a polling loop on `consumer:8001/log` while the spinner is up.
 - Replacing Streamlit with a custom React frontend.
 - Mobile responsiveness; the dashboard is laptop/projector-sized only.
 - Multi-session view (one consumer, one provider, one user) — same as today.
@@ -214,16 +249,18 @@ Items 2 and 3 are small additions. Item 1 is the biggest backend touch: it requi
 ## Risks
 
 - **Streamlit HTML rendering quirks.** Heavy custom HTML can hit Streamlit's sanitizer or layout-collapse bugs. Mitigation: incremental — port section by section, verify each renders before moving on.
-- **Provider MCP-tool logging requires a shim.** If the FastMCP API doesn't expose a clean tool-call hook, we may need to wrap each `@mcp.tool` definition manually. Acceptable cost.
+- **Provider MCP-tool logging requires a shim.** If FastMCP doesn't expose a clean middleware hook, we wrap each `@mcp.tool` definition manually (or wrap once via a decorator that re-decorates the existing tools). Acceptable cost.
+- **Tests reference `consumer/graph.py` MCP tool wrappers via monkey-patching** (`tests/test_consumer_graph.py:25`). If we reorganize tool plumbing in graph.py we'll break tests; the plan is to add tool-call logging *only* on the provider side, leaving the consumer graph and its tests untouched.
 - **Density on small screens.** At <1200 px width the triptych will wrap. Acceptable since the artifact target is paper/laptop, not mobile.
+- **Event-listener timing.** `mint_credential` / `complete_swap` fire from `provider/app.py:_event_listener` ~1-3s after `requestAgreement` is observed on chain. Because the consumer's `await_settlement` only returns OK once status is ACTIVE (which requires `complete_swap`), by the time `/chat` returns these tools have always landed. If the listener ever moves to a slower polling interval, the dashboard would need a short retry on `/tool_log` — note this in the implementation plan.
 
 ## Acceptance criteria
 
-A run of "I need 50 Mbps for 30 minutes" via chat must show, in a single screenshot:
-1. Both agent cards (name, version, wallet, skills) populated.
-2. Consumer-side MCP tools showing `browse_catalog ✓`, `request_quote ✓`, `lock_payment ✓`, `await_settlement ✓`, `present_credential ✓`.
-3. Provider-side MCP tools showing `get_catalog ✓`, `request_quote ✓`, `mint_credential ✓`, `complete_swap ✓`, `verify_credential_ownership ✓`, `allocate_bandwidth ✓`.
+A run of "I need 5 Mbps for 10 minutes" via chat must show, in a single screenshot:
+1. Both agent cards (name, version, wallet, skills, A2A endpoint) populated.
+2. Consumer-side MCP tools showing `browse_catalog ✓`, `request_quote ✓`, `lock_payment ✓`, `await_settlement ✓`, `present_credential ✓` (all "fired this turn"). The two ambient tools (`wallet_address`, `sign_message`) shown but unlit.
+3. Provider-side MCP tools showing `get_catalog ✓`, `request_quote ✓`, `verify_credential_ownership ✓`, `mint_credential ✓`, `complete_swap ✓`, `allocate_bandwidth ✓` (all fired this turn). `verify_bandwidth` only lights up if iperf probe was run; `revoke_bandwidth` stays unlit.
 4. A2A wire with at least 6 message bubbles, alternating consumer-left / provider-right, plus on-chain marker rows interleaved.
-5. On-chain events panel showing `AgreementRequested`, `Transfer` (mint), `Deposit` events with gas.
-6. NFT/SDN strip populated with token id, status `ACTIVE`, SDN rule string.
+5. On-chain events panel showing at least `AgreementRequested`, `Transfer` (mint, NFT), `Deposit` events with their gas + tx hash + block.
+6. NFT/SDN strip populated with token id, owner, status `ACTIVE`, SDN rule string, QoS class.
 7. Pipeline strip with all 6 stages green.
