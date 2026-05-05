@@ -29,6 +29,7 @@ from fastmcp import FastMCP
 from web3 import Web3
 
 from provider.catalog import get_catalog_with_availability, make_quote
+from shared.chain import STATUS_NAMES, extract_token_id, send_tx
 from shared.contracts import get_escrow_contract, get_nft_contract
 
 # Per-process in-memory deque exposed via provider/app.py:/tool_log.
@@ -99,9 +100,6 @@ _w3 = Web3(Web3.HTTPProvider(_RPC_URL))
 _provider_key = os.environ.get("PROVIDER_PRIVATE_KEY")
 _provider_account = Account.from_key(_provider_key) if _provider_key else None
 
-_TRANSFER_TOPIC = Web3.keccak(text="Transfer(address,address,uint256)").hex()
-_STATUS_NAMES = {0: "NONE", 1: "REQUESTED", 2: "ACTIVE", 3: "CLOSED", 4: "CANCELLED"}
-
 SDN_MOCK = os.environ.get("SDN_MOCK", "true").lower() == "true"
 
 try:
@@ -119,33 +117,9 @@ except ImportError:
 mcp = FastMCP("bandwidth-provider")
 
 
-def _send_provider_tx(func, value: int = 0):
-    if _provider_account is None:
-        raise RuntimeError("PROVIDER_PRIVATE_KEY not set")
-    tx = func.build_transaction({
-        "from": _provider_account.address,
-        "nonce": _w3.eth.get_transaction_count(_provider_account.address, "pending"),
-        "value": value,
-    })
-    signed = _w3.eth.account.sign_transaction(tx, _provider_key)
-    raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
-    h = _w3.eth.send_raw_transaction(raw)
-    receipt = _w3.eth.wait_for_transaction_receipt(h, timeout=60)
-    if receipt["status"] != 1:
-        tx_repr = h.hex() if hasattr(h, "hex") else str(h)
-        raise RuntimeError(f"tx reverted: {tx_repr}")
-    return h, receipt
-
-
-def _extract_token_id(receipt) -> int:
-    for entry in receipt["logs"]:
-        topic0 = entry["topics"][0]
-        topic0_hex = topic0.hex() if hasattr(topic0, "hex") else str(topic0)
-        if topic0_hex.lower().lstrip("0x") == _TRANSFER_TOPIC.lower().lstrip("0x"):
-            topic3 = entry["topics"][3]
-            topic3_hex = topic3.hex() if hasattr(topic3, "hex") else str(topic3)
-            return int(topic3_hex, 16)
-    raise RuntimeError("Transfer event not found in mint receipt")
+def _provider_send_tx(func, value: int = 0) -> tuple[str, dict]:
+    """Thin closure over shared.chain.send_tx with the provider's signer baked in."""
+    return send_tx(_w3, _provider_account, _provider_key, func, value=value)
 
 
 @mcp.tool()
@@ -204,7 +178,7 @@ def verify_credential_ownership(token_id: int, signature: str, nonce: str) -> st
 
     escrow = get_escrow_contract(_w3)
     agreement = escrow.functions.getAgreement(int(agreement_id)).call()
-    status = _STATUS_NAMES.get(agreement[7], "UNKNOWN")
+    status = STATUS_NAMES.get(agreement[7], "UNKNOWN")
 
     return json.dumps({
         "ok": True,
@@ -238,7 +212,7 @@ def mint_credential(
     """
     nft = get_nft_contract(_w3)
     endpoint = f"clab://{pe}/{subinterface}"
-    h, receipt = _send_provider_tx(
+    tx_hex, receipt = _provider_send_tx(
         nft.functions.mint(
             _provider_account.address,
             int(agreement_id),
@@ -247,11 +221,9 @@ def mint_credential(
             endpoint,
         )
     )
-    token_id = _extract_token_id(receipt)
-    tx_hash = h.hex() if hasattr(h, "hex") else str(h)
     return json.dumps({
-        "tokenId": token_id,
-        "txHash": tx_hash,
+        "tokenId": extract_token_id(receipt, nft),
+        "txHash": tx_hex,
         "endpoint": endpoint,
     })
 
@@ -268,14 +240,10 @@ def complete_swap(agreement_id: int, token_id: int) -> str:
     nft = get_nft_contract(_w3)
     escrow = get_escrow_contract(_w3)
 
-    h_approve, _ = _send_provider_tx(nft.functions.approve(escrow.address, int(token_id)))
-    h_deposit, _ = _send_provider_tx(escrow.functions.deposit(int(agreement_id), int(token_id)))
+    approve_tx, _ = _provider_send_tx(nft.functions.approve(escrow.address, int(token_id)))
+    deposit_tx, _ = _provider_send_tx(escrow.functions.deposit(int(agreement_id), int(token_id)))
 
-    return json.dumps({
-        "status": "ok",
-        "approveTx": h_approve.hex() if hasattr(h_approve, "hex") else str(h_approve),
-        "depositTx": h_deposit.hex() if hasattr(h_deposit, "hex") else str(h_deposit),
-    })
+    return json.dumps({"status": "ok", "approveTx": approve_tx, "depositTx": deposit_tx})
 
 
 @mcp.tool()

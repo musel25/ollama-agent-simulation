@@ -36,6 +36,7 @@ def _make_context(data: dict) -> MagicMock:
     ctx = MagicMock()
     ctx.message = msg
     ctx.task_id = "task-1"
+    ctx.context_id = "ctx-1"  # protobuf rejects MagicMock here
     return ctx
 
 

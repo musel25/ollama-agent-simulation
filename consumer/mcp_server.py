@@ -25,6 +25,7 @@ from fastmcp import FastMCP
 from web3 import Web3
 
 from consumer.a2a_client import send_provider_action
+from shared.chain import STATUS_NAMES, send_tx
 from shared.contracts import get_escrow_contract
 
 mcp = FastMCP("bandwidth-consumer")
@@ -34,26 +35,7 @@ _CONSUMER_KEY = os.environ.get("CONSUMER_PRIVATE_KEY")
 _w3 = Web3(Web3.HTTPProvider(_RPC_URL))
 _consumer_account = Account.from_key(_CONSUMER_KEY) if _CONSUMER_KEY else None
 
-_STATUS_NAMES = {0: "NONE", 1: "REQUESTED", 2: "ACTIVE", 3: "CLOSED", 4: "CANCELLED"}
-
 quote_cache: dict[str, dict] = {}
-
-
-def _send_consumer_tx(func, value: int = 0) -> str:
-    if _consumer_account is None:
-        raise RuntimeError("CONSUMER_PRIVATE_KEY not set")
-    tx = func.build_transaction({
-        "from": _consumer_account.address,
-        "nonce": _w3.eth.get_transaction_count(_consumer_account.address, "pending"),
-        "value": value,
-    })
-    signed = _w3.eth.account.sign_transaction(tx, _CONSUMER_KEY)
-    raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
-    h = _w3.eth.send_raw_transaction(raw)
-    receipt = _w3.eth.wait_for_transaction_receipt(h, timeout=60)
-    if receipt["status"] != 1:
-        raise RuntimeError(f"tx reverted: {h.hex() if hasattr(h, 'hex') else h}")
-    return h.hex() if hasattr(h, "hex") else str(h)
 
 
 async def _fetch_provider_address(provider_url: str) -> str:
@@ -86,15 +68,18 @@ def lock_payment(agreement_id: str) -> str:
     Send escrow.requestAgreement on chain using the cached quote.
     Returns "OK <txHash>" on success, "ERROR ..." otherwise.
     """
+    if _consumer_account is None:
+        return "ERROR: CONSUMER_PRIVATE_KEY not set"
     quote = quote_cache.get(str(agreement_id))
     if not quote:
         return f"ERROR: no cached quote for agreementId={agreement_id}. Call request_quote first."
+    provider_addr = quote.get("providerAddress")
+    if not provider_addr:
+        return "ERROR: cached quote has no providerAddress"
     try:
-        provider_addr = quote.get("providerAddress")
-        if not provider_addr:
-            return "ERROR: cached quote has no providerAddress"
         escrow = get_escrow_contract(_w3)
-        tx = _send_consumer_tx(
+        tx_hex, _ = send_tx(
+            _w3, _consumer_account, _CONSUMER_KEY,
             escrow.functions.requestAgreement(
                 int(agreement_id),
                 Web3.to_checksum_address(provider_addr),
@@ -103,11 +88,14 @@ def lock_payment(agreement_id: str) -> str:
             ),
             value=int(quote["priceWei"]),
         )
-        return f"OK {tx}"
+        return f"OK {tx_hex}"
     except Exception as e:
         return f"ERROR: {e}"
 
 
+# 20 attempts × 1.5 s ≈ 30 s upper bound — comfortably above the
+# expected mint+swap latency on a 1 s-block-time anvil. Tune in lockstep:
+# bumping attempts without bumping interval just spins the CPU.
 _SETTLEMENT_POLL_ATTEMPTS = 20
 _SETTLEMENT_POLL_INTERVAL_S = 1.5
 
@@ -126,7 +114,7 @@ def await_settlement(agreement_id: str) -> str:
     for _ in range(_SETTLEMENT_POLL_ATTEMPTS):
         try:
             ag = escrow.functions.getAgreement(aid).call()
-            status = _STATUS_NAMES.get(ag[7], "UNKNOWN")
+            status = STATUS_NAMES.get(ag[7], "UNKNOWN")
             if status == "ACTIVE":
                 return f"OK tokenId={ag[6]}"
             if status in ("CANCELLED", "CLOSED"):

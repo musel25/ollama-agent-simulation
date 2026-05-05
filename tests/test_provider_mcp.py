@@ -105,22 +105,13 @@ async def test_verify_credential_ownership_rejects_stale_nonce(consumer_key):
 
 @pytest.mark.asyncio
 async def test_mint_credential_returns_token_id():
-    transfer_topic_hex = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-    fake_receipt = {
-        "status": 1,
-        "logs": [
-            {
-                "topics": [
-                    type("T", (), {"hex": lambda self: transfer_topic_hex})(),
-                    type("T", (), {"hex": lambda self: "0x0"})(),
-                    type("T", (), {"hex": lambda self: "0x1"})(),
-                    type("T", (), {"hex": lambda self: "0x000000000000000000000000000000000000000000000000000000000000002a"})(),
-                ],
-            },
-        ],
-    }
+    fake_receipt = {"status": 1, "logs": []}
     fake_nft = MagicMock()
     fake_nft.functions.mint.return_value.build_transaction.return_value = {"from": "0xprov", "nonce": 0}
+    # shared.chain.extract_token_id decodes via nft.events.Transfer().process_receipt(...)
+    fake_nft.events.Transfer.return_value.process_receipt.return_value = [
+        {"args": {"tokenId": 42, "from": "0x0", "to": "0xprov"}},
+    ]
 
     fake_w3 = MagicMock()
     fake_w3.eth.get_transaction_count.return_value = 0

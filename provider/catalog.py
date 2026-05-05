@@ -25,7 +25,11 @@ CATALOG: list[dict] = [
 CATALOG_BY_ID: dict[str, dict] = {p["packageId"]: p for p in CATALOG}
 
 INVENTORY_FILE = Path(__file__).parent / "inventory.txt"
-QUOTE_TTL = 60
+# Quote validity window in seconds. Must comfortably cover the consumer's
+# slowest credible LangGraph latency (LLM tier-pick + lock_payment mining)
+# — small local models can blow past 60 s. 5 minutes leaves margin without
+# letting a stale quote outlive the slot.
+QUOTE_TTL = 300
 
 pending_quotes: dict[int, dict] = {}
 
