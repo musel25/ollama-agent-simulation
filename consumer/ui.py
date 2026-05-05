@@ -102,4 +102,85 @@ with st.sidebar:
         st.session_state.last_provider_ts_seen = time.time()
         st.rerun()
 
-# Body sections wired up in subsequent tasks.
+STAGES = [
+    ("01", "Discovery",     "🔍", "browse_catalog"),
+    ("02", "Quote",         "💬", "request_quote"),
+    ("03", "Payment Lock",  "🔒", "lock_payment"),
+    ("04", "Atomic Swap",   "⚡", "await_settlement"),
+    ("05", "Activation",    "🪪", "present_credential"),
+    ("06", "Consumption",   "📡", "verify_bandwidth"),
+]
+
+
+def _consumer_tool_fired(name: str) -> bool:
+    return any(e["tool"] == name for e in st.session_state.consumer_tool_log)
+
+
+def _provider_tool_fired(name: str) -> bool:
+    return any(e["tool"] == name for e in st.session_state.provider_tool_log)
+
+
+def _stage_status(trigger: str) -> str:
+    # Stage 06 fires only if iperf was run; treat probe_samples as the trigger.
+    if trigger == "verify_bandwidth":
+        return "done" if st.session_state.probe_samples else "pending"
+    if _consumer_tool_fired(trigger) or _provider_tool_fired(trigger):
+        return "done"
+    return "pending"
+
+
+def render_header() -> None:
+    turn = st.session_state.turn
+    if st.session_state.running:
+        status = f"BUSY · turn {turn}"
+        color = "#3b82f6"
+        bg = "#1a2f4a"
+    elif turn > 0:
+        status = f"READY · turn {turn}"
+        color = "#22c55e"
+        bg = "#14291a"
+    else:
+        status = "IDLE"
+        color = "#666"
+        bg = "#15151f"
+
+    st.markdown(
+        f'<div style="display:flex;justify-content:space-between;align-items:flex-start;'
+        f'padding-bottom:14px;border-bottom:1px solid var(--border);margin-bottom:14px;">'
+        f'<div><div style="font-size:18px;font-weight:600;color:#f0f0f8;">'
+        f'A2A Bandwidth Provisioning — autonomous agent demo</div>'
+        f'<div style="font-size:11px;color:var(--text-dim);margin-top:3px;">'
+        f'Orange Labs · MCP-driven consumer & provider · atomic on-chain swap · '
+        f'SDN ({"mock" if SDN_MOCK else "real"})</div></div>'
+        f'<div style="background:{bg};border:1px solid {color}55;color:{color};'
+        f'font-size:10px;padding:4px 10px;border-radius:99px;font-weight:600;'
+        f'letter-spacing:0.4px;">● {status}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_pipeline() -> None:
+    tiles = []
+    for num, label, icon, trigger in STAGES:
+        status = _stage_status(trigger)
+        if status == "done":
+            border = "#22c55e88"; bg = "#14291a44"; lcolor = "#22c55e"
+        else:
+            border = "var(--border)"; bg = "#15151f"; lcolor = "#bbb"
+        tiles.append(
+            f'<div style="background:{bg};border:1px solid {border};border-radius:8px;'
+            f'padding:10px 8px;text-align:center;">'
+            f'<div style="font-size:9px;color:#555;letter-spacing:1px;">{num}</div>'
+            f'<div style="font-size:18px;margin:4px 0;">{icon}</div>'
+            f'<div style="font-size:10px;font-weight:500;color:{lcolor};">{label}</div></div>'
+        )
+    st.markdown(
+        '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;'
+        'margin-bottom:16px;">' + "".join(tiles) + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ── body ───────────────────────────────────────────────────────────────────
+render_header()
+render_pipeline()
