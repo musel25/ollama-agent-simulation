@@ -42,7 +42,7 @@ services:
       timeout: 10s
       retries: 30
 
-  ollama-pull-4b:
+  ollama-pull-3b:
     image: ollama/ollama:latest
     depends_on:
       ollama:
@@ -51,10 +51,10 @@ services:
       - OLLAMA_HOST=http://ollama:11434
     volumes:
       - ollama:/root/.ollama
-    entrypoint: ["ollama", "pull", "qwen3:4b"]
+    entrypoint: ["ollama", "pull", "llama3.2:3b"]
     restart: "no"
 
-  ollama-pull-1.7b:
+  ollama-pull-1b:
     image: ollama/ollama:latest
     depends_on:
       ollama:
@@ -63,7 +63,7 @@ services:
       - OLLAMA_HOST=http://ollama:11434
     volumes:
       - ollama:/root/.ollama
-    entrypoint: ["ollama", "pull", "qwen3:1.7b"]
+    entrypoint: ["ollama", "pull", "llama3.2:1b"]
     restart: "no"
 
   provider-agent:
@@ -93,9 +93,9 @@ services:
     depends_on:
       provider-agent:
         condition: service_started
-      ollama-pull-4b:
+      ollama-pull-3b:
         condition: service_completed_successfully
-      ollama-pull-1.7b:
+      ollama-pull-1b:
         condition: service_completed_successfully
     ports:
       - "8001:8001"
@@ -104,7 +104,7 @@ services:
       - CONSUMER_PRIVATE_KEY=${CONSUMER_PRIVATE_KEY}
       - PROVIDER_A2A_URLS=http://provider-agent:8002
       - PROVIDER_AGENT_CARD_URL=http://provider-agent:8002/.well-known/agent-card.json
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:4b}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:3b}
       - OLLAMA_HOST=http://ollama:11434
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -118,9 +118,9 @@ services:
     depends_on:
       provider-agent:
         condition: service_started
-      ollama-pull-4b:
+      ollama-pull-3b:
         condition: service_completed_successfully
-      ollama-pull-1.7b:
+      ollama-pull-1b:
         condition: service_completed_successfully
     ports:
       - "8011:8001"
@@ -129,7 +129,7 @@ services:
       - CONSUMER_PRIVATE_KEY=${CONSUMER_PRIVATE_KEY_2}
       - PROVIDER_A2A_URLS=http://provider-agent:8002
       - PROVIDER_AGENT_CARD_URL=http://provider-agent:8002/.well-known/agent-card.json
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:4b}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:3b}
       - OLLAMA_HOST=http://ollama:11434
     volumes:
       - ./contracts/deployments:/app/contracts/deployments:ro
@@ -147,7 +147,7 @@ services:
       - "8501:8501"
     environment:
       - CONSUMER_BASE_URL=http://consumer-agent:8001
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:4b}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:3b}
     entrypoint: ["streamlit", "run", "consumer/ui.py",
                  "--server.port", "8501", "--server.address", "0.0.0.0"]
 

@@ -24,7 +24,7 @@ from shared.contracts import get_escrow_contract, get_nft_contract
 _RPC_URL = os.environ.get("RPC_URL", "http://localhost:8545")
 _w3 = Web3(Web3.HTTPProvider(_RPC_URL))
 
-DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
+DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 PROVIDER_A2A_URLS = [u.strip() for u in
                      os.environ.get("PROVIDER_A2A_URLS",
                                     os.environ.get("PROVIDER_BASE_URL",

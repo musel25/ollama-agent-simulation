@@ -40,7 +40,7 @@ This is a research prototype accompanying an academic paper.
 | OpenZeppelin Contracts | (Foundry lib) | ERC-721 base (`ERC721`, `ERC721Holder`, `Ownable`) |
 | Docker / Docker Compose v2 | — | Container orchestration for the full stack |
 | Ollama (container) | latest | Hosts LLM models locally; serves at :11434 inside Docker |
-| qwen3:4b / qwen3:1.7b | — | Default LLM models; must support tool-calling |
+| llama3.2:3b / llama3.2:1b | — | Default LLM models; must support tool-calling |
 | pytest | ≥9.0.3 | Unit tests |
 | pytest-asyncio | ≥1.3.0 | Async test support |
 
@@ -521,7 +521,7 @@ Streamlit state is client-session-scoped and does not persist across page reload
 | `PROVIDER_BASE_URL` | No | `http://localhost:8002` | Consumer → provider REST base URL (for `/address` call) | `execute_agreement` fails |
 | `PROVIDER_MCP_URL` | No | `http://localhost:8002/mcp` | MCP endpoint for consumer's FastMCP client | LLM has no provider tools; purchases impossible |
 | `CONSUMER_BASE_URL` | No | `http://localhost:8001` | UI → consumer agent base URL | UI cannot reach backend |
-| `OLLAMA_MODEL` | No | `qwen3:4b` | Default LLM model name | Falls back to `qwen3:4b`; fails if model not pulled |
+| `OLLAMA_MODEL` | No | `llama3.2:3b` | Default LLM model name | Falls back to `llama3.2:3b`; fails if model not pulled |
 | `OLLAMA_HOST` | No | unset (Ollama default) | Ollama server URL for Docker containers | In Docker: consumer can't reach the Ollama container |
 
 ### Config files

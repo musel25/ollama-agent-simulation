@@ -238,6 +238,6 @@ runtime behaviour, and no other module reads their content.
   are safe to tune *as long as you re-run* `uv run pytest tests/test_consumer_graph.py -v`
   afterwards to confirm the node still returns a valid `WorkflowState` update.
 - **`OLLAMA_MODEL` env var** — swap to any Ollama model that supports tool calling (e.g.
-  `qwen3:1.7b`, `qwen3:4b`). No code change required.
+  `llama3.2:1b`, `llama3.2:3b`). No code change required.
 - **Anything inside `tests/`** — improving test coverage or fixing test helpers cannot break
   production code. You are editing the verification layer, not the thing being verified.

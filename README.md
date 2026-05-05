@@ -69,7 +69,7 @@ If you've never seen this project before: read those docs in the order listed.
 - **Python 3.13** with `uv` for environment management
 - **FastAPI** for the agent HTTP servers, **Streamlit** for the UI
 - **FastMCP** for the MCP servers, **a2a-sdk** for inter-agent calls
-- **Ollama** running `qwen3:4b` locally (swappable; see [`docs/05-running.md`](docs/05-running.md))
+- **Ollama** running `llama3.2:3b` locally (swappable; see [`docs/05-running.md`](docs/05-running.md))
 - **Solidity 0.8.x** + **Foundry/Anvil** for the smart-contract layer
 - **`tc tbf`** + **gNMI** for SDN bandwidth enforcement (mock by default; real path uses [`srl-gnmi-bandwidth-poc`](https://github.com/musel25/srl-gnmi-bandwidth-poc))
 

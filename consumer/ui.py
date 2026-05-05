@@ -19,8 +19,8 @@ from web3 import Web3
 
 CONSUMER_BASE_URL = os.environ.get("CONSUMER_BASE_URL", "http://localhost:8001")
 PROVIDER_BASE_URL = os.environ.get("PROVIDER_BASE_URL", "http://localhost:8002")
-DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
-MODELS = list(dict.fromkeys([DEFAULT_MODEL, "qwen3:4b", "qwen3:1.7b"]))
+DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+MODELS = list(dict.fromkeys([DEFAULT_MODEL, "llama3.2:3b", "llama3.2:1b"]))
 SDN_MOCK = os.environ.get("SDN_MOCK", "true").lower() == "true"
 
 # ── Streamlit page setup ───────────────────────────────────────────────────

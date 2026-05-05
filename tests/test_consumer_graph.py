@@ -268,7 +268,7 @@ async def test_full_graph_happy_path(monkeypatch, fake_catalog):
     result = await graph.ainvoke({
         "user_message": "I need 5 Mbps",
         "provider_url": "http://provider:8002",
-        "model": "qwen3:4b",
+        "model": "llama3.2:3b",
         "log": [], "thinking": [],
     })
     assert result["chosen_tier"] == "medium"

@@ -10,7 +10,7 @@
 
 **However, the paper currently overstates two things and under-delivers on one.** Specifically:
 1. It claims a **LangGraph state-machine agent** that the code does not implement (the consumer is a plain Ollama tool-calling loop).
-2. It claims **Qwen3-4B** as the model, but the repo's working defaults are `qwen3:1.7b` / `ministral:3b`.
+2. It claims **Qwen3-4B** as the model, but the repo's working default is now `llama3.2:3b` (with `llama3.2:1b` as the smaller alternative).
 3. **§Evaluation defines RQ1/RQ2 but no numbers exist** — neither in the paper nor in the repo as a benchmark harness. The abstract already promises "reporting indicative latency and gas costs."
 
 These three issues are blocking for an honest research paper, but all three are cheap to fix. The architectural core (RQ1 feasibility) is in fact already demonstrable end-to-end via `make demo` and `make demo-real`.
@@ -55,20 +55,11 @@ This is the heart of the paper, and the heart of the paper works.
 - **(A) Adapt paper [recommended].** Rewrite "Stack rationale → Agent framework" to describe what is actually used: an MCP tool-calling loop with the Ollama Python SDK, where state is enforced by (i) the on-chain status machine, (ii) the file-locked SlotPool, and (iii) constrained tool exposure (`browse_catalog → request_quote → lock_payment → await_settlement → present_credential`). Argue that the deterministic pipeline is enforced by the contract + tool boundary, *not* by an agent-framework graph. CrewAI/AutoGen comparison can stay (they would still be a worse fit), but drop the LangGraph claim. This is honest and arguably more interesting — the "state machine" lives in the chain, not in Python.
 - **(B) Adapt code.** Wrap `run_consumer` in a LangGraph `StateGraph` with one node per workflow stage. ~half a day. Adds a dependency for marketing reasons. **Not recommended** unless reviewers are likely to demand it.
 
-### 3.2 Model mismatch  ⚠️ **blocker (cosmetic but obvious)**
+### 3.2 Model standardisation  📝 **paper update needed**
 
-**Paper §Prototype:** *"Ollama runs **Qwen3-4B** locally with pinned model versions … a 4B-parameter model is sufficient for the bounded tool-calling load …"*
+**Code reality (current):** Ollama runs **Llama 3.2 3B** locally as the default everywhere — `consumer/app.py`, `consumer/graph.py`, `consumer/ui.py`, `.env.example`, `Makefile`, `docker-compose.yml`. `llama3.2:1b` ships pre-pulled as the smaller alternative. `qwen3:*` and `ministral:3b` are no longer present in the repo.
 
-**Code reality:**
-- `consumer/app.py:22` defaults `OLLAMA_MODEL` to `qwen3:4b` ✅
-- `docker-compose.yml` pulls **both** `qwen3:4b` *and* `qwen3:1.7b`
-- `.env.example:29` ships `OLLAMA_MODEL=qwen3:1.7b` ❌
-- `README.md:84` instructs `ollama pull ministral:3b` and calls it the default ❌
-- `Makefile:31` `make demo` uses `qwen3:4b` ✅
-
-**Fix (either side):**
-- **(A) Adapt code [recommended].** Make `qwen3:4b` the *only* default everywhere (`.env.example`, `README.md`, both Dockerfiles). Drop the `ministral:3b` reference from the README — or keep it as one tested alternative. Keep `qwen3:1.7b` as a "cheaper" option, but not the default.
-- **(B) Adapt paper.** Say "Qwen3-1.7B / Qwen3-4B" and justify why a 1.7B model also works on this bounded tool-calling load (cite `belcakSmallLanguageModels2025`). This is fine if you want to show the smaller model also passes RQ1.
+**Paper §Prototype** still says *"Ollama runs **Qwen3-4B** locally with pinned model versions … a 4B-parameter model is sufficient for the bounded tool-calling load …"* — this needs to be rewritten to match the new default. The "tool-calling load" framing is also inaccurate: the consumer's LangGraph nodes call the LLM via plain text completion (single-word classification + short prose), not via the OpenAI-style tool-call API. A more honest sentence would be: *"Ollama runs **Llama 3.2 3B** locally with pinned model versions … the workload is structured single-word classification and short-prose generation, well within reach of 3B-class models."*
 
 ### 3.3 RQ1/RQ2 results missing  ⚠️ **blocker for an evaluation section**
 
@@ -135,7 +126,7 @@ The paper differentiates from Bandara et al. on two dimensions: agents are gener
 These won't change the paper but will affect a reviewer who clones the repo.
 
 1. **Delete legacy dead code.** `app.py`, `consumer_agent.py`, `provider_server.py`, `catalog.txt`, `agreements.json` are explicitly marked dead in `docs/04-architecture.md §1` and §11. They will confuse anyone trying to reproduce the paper's prototype. The `chore: legacy purge` PR is two `git rm` commands.
-2. **Pin the model in `.env.example`.** As above, `qwen3:4b` should be the documented default if the paper says Qwen3-4B.
+2. ~~**Pin the model in `.env.example`.**~~ — **resolved.** `OLLAMA_MODEL=llama3.2:3b` is the single default everywhere; paper §Prototype needs the matching rename to *Llama 3.2 3B*.
 3. **Add `make eval`** that runs the harness from §3.3 and produces a `eval/results.json` (and a markdown table the paper imports).
 4. **Add a tiny `forge test` for `BandwidthEscrow`** so `forge test --gas-report` produces canonical gas numbers for the table — gas measured from a unit test is more reproducible than gas measured from a demo run.
 5. **`README.md` "Does not"** says *"Enforce bandwidth at the network layer (no QoS, no traffic shaping, no real hardware)"* — this is **wrong** since the SDN integration landed. The `make demo-real` path with ContainerLab + SR Linux + `tc` *does* enforce bandwidth. Update this list to match reality (move QoS/traffic-shaping into "Does:").
@@ -178,7 +169,7 @@ These are explicitly listed as "out of scope" or "limitations" and the code is c
 Cheapest path to a defensible submission, in order:
 
 1. **Decide §3.1 (LangGraph)** — pick (A) edit paper. ~30 min text change.
-2. **Decide §3.2 (model)** — pick (A) standardize on `qwen3:4b` everywhere. ~10 min repo change, no paper change.
+2. ~~**Decide §3.2 (model).**~~ — **resolved on the code side.** `llama3.2:3b` is the only default. Paper §Prototype still needs the *Qwen3-4B → Llama 3.2 3B* rename.
 3. **Repo cleanup §4.1, §4.2, §4.5** — delete legacy, pin default, fix README "does not" list. ~20 min.
 4. **Build the `eval/` harness §3.3** — half a day. Run it, paste numbers into §Evaluation table, fill in the abstract's "indicative latency and gas costs" with real values.
 5. **Reframe future work §3.5** — 15 min text change.
@@ -190,4 +181,4 @@ Total: roughly 1–2 working days of focused effort. After this, the paper and t
 
 ## 8. One-line summary
 
-> The architectural core (A2A + per-agent MCP + atomic on-chain swap + NFT-gated SDN activation) is faithfully implemented and is the paper's strongest contribution. The blockers are: paper claims LangGraph that doesn't exist (rewrite that paragraph), paper picks a model the repo doesn't default to (standardize on Qwen3-4B), and §Evaluation has no numbers (add a small benchmark harness). After those three fixes, the paper is honest and reproducible.
+> The architectural core (A2A + per-agent MCP + atomic on-chain swap + NFT-gated SDN activation + LangGraph state machine) is faithfully implemented and is the paper's strongest contribution. Remaining work is paper-side: rename Qwen3-4B → Llama 3.2 3B in §Prototype, and add §Evaluation numbers from a small benchmark harness. After those two edits, the paper is honest and reproducible.

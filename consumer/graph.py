@@ -59,7 +59,7 @@ def _log_result(state: WorkflowState, sender: str, result: str) -> None:
     })
 
 
-DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
+DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 
 # Module-level cache so we don't reconnect for every node call.

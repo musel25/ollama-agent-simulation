@@ -57,18 +57,19 @@ Verify:
 ollama --version
 ```
 
-**Docker mode:** the `ollama-pull-4b` and `ollama-pull-1.7b` containers pull
+**Docker mode:** the `ollama-pull-3b` and `ollama-pull-1b` containers pull
 the models automatically on first `make up`. You do not need to pull manually.
 
 **Bare-metal mode:** you must pull the model yourself before starting the
 agents:
 
 ```bash
-ollama pull qwen3:4b
+ollama pull llama3.2:3b
 ```
 
-The default `qwen3:4b` download is roughly 2.6 GB. The lighter alternative
-`qwen3:1.7b` is about 1.1 GB. Both support tool-calling, which is required.
+The default `llama3.2:3b` download is roughly 2.0 GB. The lighter alternative
+`llama3.2:1b` is about 1.3 GB. Either model works — the consumer's LangGraph
+nodes use plain text completion (no tool-calling required).
 
 ### uv
 
@@ -140,7 +141,7 @@ pointing at a different host.
 | Variable | Default (Docker) | Notes |
 |---|---|---|
 | `RPC_URL` | `http://anvil:8545` | Use `http://localhost:8545` for bare-metal |
-| `OLLAMA_MODEL` | `qwen3:4b` | Any tool-calling model works; see [Changing the AI model](#changing-the-ai-model) |
+| `OLLAMA_MODEL` | `llama3.2:3b` | Any tool-calling model works; see [Changing the AI model](#changing-the-ai-model) |
 | `SDN_MOCK` | `true` | Set to `false` only for the real SDN path |
 | `OLLAMA_HOST` | `http://ollama:11434` | Use `http://localhost:11434` for bare-metal |
 | `PROVIDER_BASE_URL` | `http://provider-agent:8002` | Consumer uses this to reach the provider |
@@ -188,7 +189,7 @@ The services come up in dependency order:
 1. **anvil** starts and becomes healthy (block-number RPC call succeeds).
 2. **deployer** runs `forge script`, deploys `BandwidthNFT` and
    `BandwidthEscrow`, writes `contracts/deployments/local.json`, then exits 0.
-3. **ollama** starts. **ollama-pull-4b** and **ollama-pull-1.7b** pull their
+3. **ollama** starts. **ollama-pull-3b** and **ollama-pull-1b** pull their
    models and exit 0.
 4. **provider-agent** starts (waits for deployer to exit 0).
 5. **consumer-agent** starts (waits for provider-agent and both pull jobs).
@@ -200,7 +201,7 @@ Check the current state at any time:
 docker compose ps
 ```
 
-All services except `deployer`, `ollama-pull-4b`, and `ollama-pull-1.7b`
+All services except `deployer`, `ollama-pull-3b`, and `ollama-pull-1b`
 should show `running`. Those three are one-shot and show `exited (0)` when
 successful.
 
@@ -432,16 +433,16 @@ make down        # stops the Docker Compose services
 
 ## Changing the AI model
 
-The default model is `qwen3:4b`. To use a different one, set `OLLAMA_MODEL`
+The default model is `llama3.2:3b`. To use a different one, set `OLLAMA_MODEL`
 before starting the stack:
 
 ```bash
-OLLAMA_MODEL=qwen3:1.7b make up
+OLLAMA_MODEL=llama3.2:1b make up
 # or set it permanently in .env
 ```
 
-The Docker Compose stack pre-pulls both `qwen3:4b` and `qwen3:1.7b` via the
-`ollama-pull-4b` and `ollama-pull-1.7b` one-shot services, so switching
+The Docker Compose stack pre-pulls both `llama3.2:3b` and `llama3.2:1b` via the
+`ollama-pull-3b` and `ollama-pull-1b` one-shot services, so switching
 between those two requires no manual pull.
 
 For any other model, pull it manually first:
@@ -456,8 +457,8 @@ Then set `OLLAMA_MODEL=<model-name>` in `.env` and restart.
 
 | Model | Size | Notes |
 |---|---|---|
-| `qwen3:4b` | ~2.6 GB | Default. Best tier-selection accuracy. |
-| `qwen3:1.7b` | ~1.1 GB | Faster. Occasionally picks the wrong tier on ambiguous requests. |
+| `llama3.2:3b` | ~2.0 GB | Default. Best tier-selection accuracy. |
+| `llama3.2:1b` | ~1.3 GB | Faster. Occasionally picks the wrong tier on ambiguous requests. |
 
 The model **must** support tool-calling (function-call API). Models that only
 do text completion will not work — the consumer's LangGraph loop depends on
@@ -507,7 +508,7 @@ Foundry cannot sign the transaction.
 
 ### `ollama pull` fails or times out
 
-**Symptom.** `docker compose logs ollama-pull-4b` (or `ollama-pull-1.7b`)
+**Symptom.** `docker compose logs ollama-pull-3b` (or `ollama-pull-1b`)
 shows a network error, a timeout, or a "429 Too Many Requests" from the
 Ollama model hub.
 
@@ -547,12 +548,12 @@ on port 8545 on the host.
 **Symptom.** `make demo` exits immediately with
 `ERROR: consumer agent not running on :8001`.
 
-**Cause.** The consumer container is still waiting for the `ollama-pull-4b`
-and `ollama-pull-1.7b` jobs to complete, which can take several minutes on
+**Cause.** The consumer container is still waiting for the `ollama-pull-3b`
+and `ollama-pull-1b` jobs to complete, which can take several minutes on
 first run. The container may also have crashed.
 
 **Fix.**
-1. Check whether the pull jobs have finished: `docker compose logs ollama-pull-4b`.
+1. Check whether the pull jobs have finished: `docker compose logs ollama-pull-3b`.
 2. If they are still running, wait and retry.
 3. If the consumer container itself is the problem:
    `docker compose logs consumer-agent` will show the startup error.
@@ -606,12 +607,12 @@ complete before the `tc` shapers are in place.
 Mbps) tier, or the chat response contains a tier that does not match your
 request.
 
-**Cause.** Small models (`qwen3:1.7b`) occasionally misread bandwidth numbers
+**Cause.** Small models (`llama3.2:1b`) occasionally misread bandwidth numbers
 or pick based on price rather than Mbps. This is a model capability issue, not
 a bug in the agents.
 
 **Fix.**
-1. Switch to the larger model: set `OLLAMA_MODEL=qwen3:4b` in `.env` and
+1. Switch to the larger model: set `OLLAMA_MODEL=llama3.2:3b` in `.env` and
    restart.
 2. Rephrase the request to be more explicit, for example:
    `"I need the medium tier, 5 Mbps, for 10 minutes"`.

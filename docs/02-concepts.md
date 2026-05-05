@@ -105,7 +105,7 @@ When your Python code needs to call another service over the network, you need a
 
 A container is like a lightweight virtual machine. It bundles your code, the Python interpreter, all libraries, and OS-level tools into one image that runs identically on any machine. Docker builds images from `Dockerfile` instructions. Docker Compose lets you declare multiple services (consumer, provider, blockchain node, LLM server) in a single `docker-compose.yml` file and start them all with one command.
 
-**In this project:** `docker-compose.yml` at the repo root defines eight services: `anvil` (blockchain), `deployer` (one-shot contract deployment), `ollama` (LLM server), `ollama-pull-4b`, `ollama-pull-1.7b`, `provider-agent`, `consumer-agent`, and `consumer-ui`. The `ollama-pull-*` services are one-shot — they exit after pulling the model. A ninth service, `consumer-agent-2`, is profile-gated (`profiles: [multi-consumer]`) and does not start with `make up`. `Dockerfile.consumer` and `Dockerfile.provider` define the images. Use `make up` to build and start everything, `make down` to stop.
+**In this project:** `docker-compose.yml` at the repo root defines eight services: `anvil` (blockchain), `deployer` (one-shot contract deployment), `ollama` (LLM server), `ollama-pull-3b`, `ollama-pull-1b`, `provider-agent`, `consumer-agent`, and `consumer-ui`. The `ollama-pull-*` services are one-shot — they exit after pulling the model. A ninth service, `consumer-agent-2`, is profile-gated (`profiles: [multi-consumer]`) and does not start with `make up`. `Dockerfile.consumer` and `Dockerfile.provider` define the images. Use `make up` to build and start everything, `make down` to stop.
 
 ---
 
@@ -118,7 +118,7 @@ Instead of putting your private key or database URL directly in source code (whi
 **In this project:** secrets and configuration live in `.env` (committed here for convenience with test-only keys; in production you would not commit this). `.env.example` documents every variable. The four most important ones are:
 - `RPC_URL` — the Ethereum node to connect to (default `http://localhost:8545`)
 - `CONSUMER_PRIVATE_KEY` / `PROVIDER_PRIVATE_KEY` — Ethereum signing keys for each agent
-- `OLLAMA_MODEL` — which LLM model to use (default `qwen3:4b`)
+- `OLLAMA_MODEL` — which LLM model to use (default `llama3.2:3b`)
 - `SDN_MOCK` — set to `true` to skip real network hardware (default `true`)
 
 ---
@@ -129,9 +129,9 @@ Instead of putting your private key or database URL directly in source code (whi
 
 **One-liner:** A neural network trained on huge amounts of text that can generate, summarize, translate, and reason about language.
 
-LLMs like GPT, Claude, and Qwen are trained to predict the next word given what came before. Through this deceptively simple objective, they learn to write code, answer questions, follow instructions, and use tools. You interact with an LLM by sending it a "prompt" (text) and receiving generated text in return. The model has no persistent memory between calls — each call is independent unless you include prior history in the prompt.
+LLMs like GPT, Claude, and Llama are trained to predict the next word given what came before. Through this deceptively simple objective, they learn to write code, answer questions, follow instructions, and use tools. You interact with an LLM by sending it a "prompt" (text) and receiving generated text in return. The model has no persistent memory between calls — each call is independent unless you include prior history in the prompt.
 
-"Large" refers to the number of parameters (weights) in the neural network — modern LLMs range from a few billion to over a trillion parameters. Larger models are generally more capable but slower and more expensive to run. The models used here (`qwen3:4b` and `qwen3:1.7b`) are small enough to run on a laptop GPU or CPU, at the cost of some reasoning quality compared to frontier models.
+"Large" refers to the number of parameters (weights) in the neural network — modern LLMs range from a few billion to over a trillion parameters. Larger models are generally more capable but slower and more expensive to run. The models used here (`llama3.2:3b` and `llama3.2:1b`) are small enough to run on a laptop GPU or CPU, at the cost of some reasoning quality compared to frontier models.
 
 **In this project:** the consumer agent uses a locally served LLM as its "brain." The LLM decides which bandwidth tier to buy (`pick_tier_node`) and writes the final summary sentence (`summary_node`). Everything else — on-chain transactions, A2A calls — is deterministic Python code, not LLM output.
 
@@ -143,7 +143,7 @@ LLMs like GPT, Claude, and Qwen are trained to predict the next word given what 
 
 Ollama handles the complexity of running LLMs locally: downloading model weights, managing GPU/CPU resources, and exposing a simple HTTP API that looks like OpenAI's. You `ollama pull <model>` to download a model, and then call `http://localhost:11434` to use it. This means no API keys, no network latency to cloud services, and no data leaving your machine.
 
-**In this project:** the `ollama` service in `docker-compose.yml` runs the Ollama server. On first start, Docker Compose also runs `ollama-pull-4b` and `ollama-pull-1.7b` services to download `qwen3:4b` and `qwen3:1.7b`. The default model is `qwen3:4b` (set via `OLLAMA_MODEL`). Ollama serves at port `:11434`.
+**In this project:** the `ollama` service in `docker-compose.yml` runs the Ollama server. On first start, Docker Compose also runs `ollama-pull-3b` and `ollama-pull-1b` services to download `llama3.2:3b` and `llama3.2:1b`. The default model is `llama3.2:3b` (set via `OLLAMA_MODEL`). Ollama serves at port `:11434`.
 
 ---
 
@@ -151,7 +151,7 @@ Ollama handles the complexity of running LLMs locally: downloading model weights
 
 **One-liner:** A "prompt" is the text you send to an LLM to ask it something; a "system prompt" is special setup instructions placed before the conversation starts.
 
-Every LLM call consists of a sequence of messages. A "user" message is the thing being asked. A "system" message (often called a system prompt) comes first and sets the assistant's persona, constraints, and background knowledge. The LLM reads all messages in order and generates the next one. Some models (like the Qwen3 family) also produce internal "thinking" text (chain-of-thought reasoning in `<think>...</think>` tags) before their visible answer.
+Every LLM call consists of a sequence of messages. A "user" message is the thing being asked. A "system" message (often called a system prompt) comes first and sets the assistant's persona, constraints, and background knowledge. The LLM reads all messages in order and generates the next one. Some models (like the Qwen and DeepSeek families) also produce internal "thinking" text (chain-of-thought reasoning in `<think>...</think>` tags) before their visible answer; the Llama 3.2 models used here do not.
 
 Writing a good prompt is an iterative craft. The guiding principle here is: make each prompt as short and focused as possible. A prompt that says "you are a general-purpose agent; figure everything out" produces unpredictable behavior. A prompt that says "choose one word from {small, medium, large} that best matches this user request" produces reliable output.
 
