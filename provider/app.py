@@ -34,7 +34,7 @@ from provider.catalog import (
     pending_quotes,
     slot_pool,
 )
-from provider.mcp_server import mcp
+from provider.mcp_server import mcp, tool_call_log
 from shared.contracts import get_escrow_contract, get_nft_contract
 
 # CE peer pairs across pe1 ↔ pe2 (defined by the clab topology in
@@ -235,6 +235,14 @@ async def probe(req: ProbeRequest) -> dict:
         "passed": bool(verify.get("passed", False)),
         "message": verify.get("message", ""),
     }
+
+
+@app.get("/tool_log")
+def get_tool_log(since_ts: float | None = None) -> list[dict]:
+    entries = list(tool_call_log)
+    if since_ts is not None:
+        entries = [e for e in entries if e["ts"] > since_ts]
+    return entries
 
 
 _a2a_handler = DefaultRequestHandler(
