@@ -14,10 +14,15 @@ from fastapi import FastAPI, HTTPException
 from fastmcp import Client as MCPClient
 from google.protobuf.json_format import MessageToDict
 from pydantic import BaseModel, Field
+from web3 import Web3
 
 from consumer.agent_card import build_consumer_agent_card
 from consumer.graph import build_graph
 from consumer.mcp_server import mcp as consumer_mcp
+from shared.contracts import get_escrow_contract, get_nft_contract
+
+_RPC_URL = os.environ.get("RPC_URL", "http://localhost:8545")
+_w3 = Web3(Web3.HTTPProvider(_RPC_URL))
 
 DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
 PROVIDER_A2A_URLS = [u.strip() for u in
@@ -129,6 +134,58 @@ async def consumer_address_endpoint() -> dict:
     async with MCPClient(consumer_mcp) as c:
         result = await c.call_tool("wallet_address", {})
     return {"address": result.content[0].text}
+
+
+@app.get("/chain_events")
+def chain_events(since_block: int = 0) -> list[dict]:
+    """Return escrow + NFT events emitted since `since_block`.
+
+    Used by the dashboard to populate the on-chain panel. Each event:
+      {event, args, block, txHash, gas}
+    where args is a JSON-safe dict of the event's indexed/non-indexed args.
+    """
+    escrow = get_escrow_contract(_w3)
+    nft = get_nft_contract(_w3)
+    to_block = _w3.eth.block_number
+
+    def _serialize(args) -> dict:
+        out = {}
+        for k, v in dict(args).items():
+            if isinstance(v, (bytes, bytearray)):
+                out[k] = "0x" + v.hex()
+            elif hasattr(v, "hex") and not isinstance(v, (int, str)):
+                out[k] = v.hex()
+            else:
+                out[k] = str(v) if not isinstance(v, (int, str, bool, type(None))) else v
+        return out
+
+    def _gather(get_logs_fn, name: str) -> list[dict]:
+        try:
+            logs = get_logs_fn(fromBlock=since_block, toBlock=to_block)
+        except Exception:
+            return []
+        out = []
+        for evt in logs:
+            tx_hash = evt["transactionHash"].hex() if hasattr(evt["transactionHash"], "hex") else str(evt["transactionHash"])
+            try:
+                gas = int(_w3.eth.get_transaction_receipt(tx_hash)["gasUsed"])
+            except Exception:
+                gas = 0
+            out.append({
+                "event": name,
+                "args": _serialize(evt["args"]),
+                "block": int(evt["blockNumber"]),
+                "txHash": tx_hash,
+                "gas": gas,
+            })
+        return out
+
+    events: list[dict] = []
+    events += _gather(escrow.events.AgreementRequested.get_logs, "AgreementRequested")
+    events += _gather(escrow.events.Deposit.get_logs, "Deposit")
+    events += _gather(nft.events.Transfer.get_logs, "Transfer")
+    events.sort(key=lambda e: e["block"])
+    return events
 
 
 if __name__ == "__main__":
