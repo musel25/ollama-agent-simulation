@@ -291,14 +291,51 @@ with st.sidebar:
                 )
             if resp.status_code == 200:
                 data = resp.json()
-                st.success(
-                    f"Active — {data['bandwidth_mbps']} Mbps | "
-                    f"{data['seconds_remaining']}s remaining"
-                )
+                st.session_state.verified_token = data
+                st.session_state.probe_samples = []
             else:
-                st.error(resp.json().get("detail", resp.text))
+                st.session_state.pop("verified_token", None)
+                detail = resp.json().get("detail", resp.text) if resp.headers.get("content-type", "").startswith("application/json") else resp.text
+                st.error(detail)
         except Exception as e:
             st.error(f"Could not reach consumer agent: {e}")
+
+    vt = st.session_state.get("verified_token")
+    if vt:
+        st.success(
+            f"{vt['status']} — {vt['bandwidth_mbps']} Mbps | "
+            f"{vt['seconds_remaining']}s remaining"
+        )
+        st.caption(f"endpoint: `{vt['endpoint']}`")
+        st.caption(f"owner: `{vt['owner'][:10]}…`  agreement: `{vt['agreementId'][:10]}…`")
+
+        if st.button("Run iperf3 probe"):
+            try:
+                with httpx.Client(timeout=30.0) as client:
+                    resp = client.post(
+                        f"{CONSUMER_BASE_URL}/probe_proxy",
+                        json={"tokenId": int(vt["tokenId"])},
+                    )
+                if resp.status_code == 200:
+                    sample = resp.json()
+                    st.session_state.probe_samples.append(sample)
+                else:
+                    st.error(resp.json().get("detail", resp.text))
+            except Exception as e:
+                st.error(f"Probe failed: {e}")
+
+        samples = st.session_state.get("probe_samples", [])
+        if samples:
+            chart_data = {
+                "measured_mbps": [s["measured_mbps"] for s in samples],
+                "expected_mbps": [s["expected_mbps"] for s in samples],
+            }
+            st.line_chart(chart_data, height=180)
+            last = samples[-1]
+            st.caption(
+                f"last: {last['src_ce']}→{last['dst_ce']}  "
+                f"{last['measured_mbps']:.2f} / {last['expected_mbps']:.1f} Mbps"
+            )
 
 # Stepper bar (full width above columns)
 render_stepper(st.session_state.timeline)
