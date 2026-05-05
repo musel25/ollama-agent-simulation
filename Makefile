@@ -44,8 +44,6 @@ CLAB_REPO ?= ../srl-gnmi-bandwidth-poc
 clab-up:
 	@test -d $(CLAB_REPO) || (echo "ERROR: brother repo not at $(CLAB_REPO)"; exit 1)
 	cd $(CLAB_REPO) && bash scripts/deploy.sh
-	@echo "Sleeping 60s for SR Linux to boot..."
-	@sleep 60
 	cd $(CLAB_REPO) && bash scripts/push-config.sh
 	@echo "ContainerLab ready."
 
