@@ -102,6 +102,142 @@ with st.sidebar:
         st.session_state.last_provider_ts_seen = time.time()
         st.rerun()
 
+CONSUMER_TOOLS = [
+    ("browse_catalog",     "a2a",      False),
+    ("request_quote",      "a2a",      False),
+    ("lock_payment",       "on-chain", False),
+    ("await_settlement",   "on-chain", False),
+    ("present_credential", "a2a",      False),
+    ("wallet_address",     "local",    True),   # ambient
+    ("sign_message",       "local",    True),   # ambient
+]
+
+PROVIDER_TOOLS = [
+    ("get_catalog",                "read",     False),
+    ("request_quote",              "read",     False),
+    ("verify_credential_ownership","read",     False),
+    ("mint_credential",            "on-chain", False),
+    ("complete_swap",              "on-chain", False),
+    ("allocate_bandwidth",         "sdn",      False),
+    ("verify_bandwidth",           "sdn",      False),
+    ("revoke_bandwidth",           "expiry",   True),  # ambient
+]
+
+
+_MCP_RE = re.compile(r"\[MCP\]\s+(\w+)\(")
+
+
+def _parse_consumer_tools_from_log(log: list[dict], turn: int) -> list[dict]:
+    """Extract [MCP] tool_name(...) markers from a /chat log and tag each
+    with the turn it fired in. Used by ingest_chat_response."""
+    out = []
+    for entry in log:
+        if entry.get("from") != "consumer":
+            continue
+        m = _MCP_RE.search(entry.get("message", ""))
+        if m:
+            out.append({"tool": m.group(1), "turn": turn})
+    return out
+
+
+def _merge_tool_log(existing: list[dict], new_entries: list[dict]) -> list[dict]:
+    """De-duplicate by (tool, turn). Older turns kept; newer turns append."""
+    seen = {(e["tool"], e["turn"]) for e in existing}
+    out = list(existing)
+    for e in new_entries:
+        key = (e["tool"], e["turn"])
+        if key not in seen:
+            out.append(e)
+            seen.add(key)
+    return out
+
+
+def _tool_status(tool_log: list[dict], tool_name: str, current_turn: int) -> str:
+    """Return 'fired_this_turn' / 'fired_previously' / 'not_yet_fired'."""
+    turns = [e["turn"] for e in tool_log if e["tool"] == tool_name]
+    if not turns:
+        return "not_yet_fired"
+    if max(turns) >= current_turn:
+        return "fired_this_turn"
+    return "fired_previously"
+
+
+@st.cache_data(ttl=10)
+def _fetch_address(base_url: str) -> str | None:
+    try:
+        with httpx.Client(timeout=3.0) as c:
+            r = c.get(f"{base_url}/address")
+            r.raise_for_status()
+            return r.json()["address"]
+    except Exception:
+        return None
+
+
+def _render_tool_row(name: str, tag: str, ambient: bool, status: str) -> str:
+    if ambient:
+        border = "1px dashed #2a2a3e"; nm_color = "#666"; tag_color = "#444"; mark = ""
+    elif status == "fired_this_turn":
+        border = "1px solid #3b82f6"; nm_color = "#93c5fd"; tag_color = "#3b82f6"; mark = " ✓"
+    elif status == "fired_previously":
+        border = "1px solid #22c55e44"; nm_color = "#7fc99a"; tag_color = "#22c55e88"; mark = " ✓"
+    else:
+        border = "1px solid #232333"; nm_color = "#bbb"; tag_color = "#666"; mark = ""
+    return (
+        f'<div style="display:flex;justify-content:space-between;align-items:center;'
+        f'font-family:ui-monospace,monospace;font-size:10px;padding:4px 8px;'
+        f'border-radius:5px;background:#15151f;border:{border};margin-bottom:3px;">'
+        f'<span style="color:{nm_color};">{html_lib.escape(name)}{mark}</span>'
+        f'<span style="font-size:8px;color:{tag_color};">{html_lib.escape(tag)}</span></div>'
+    )
+
+
+def render_consumer_panel() -> None:
+    addr = _fetch_address(CONSUMER_BASE_URL) or "—"
+    addr_short = (addr[:6] + "…" + addr[-4:]) if addr != "—" else "—"
+    turn = st.session_state.turn
+
+    tool_rows = "".join(
+        _render_tool_row(name, tag, ambient,
+                         _tool_status(st.session_state.consumer_tool_log, name, turn))
+        for name, tag, ambient in CONSUMER_TOOLS
+    )
+
+    st.markdown(f'''
+      <div class="panel agent-panel">
+        <div class="panel-title">
+          <span>🛒 Consumer Agent</span>
+          <span class="meta">v2.0.0</span>
+        </div>
+        <div style="font-size:13px;font-weight:600;color:#f0f0f8;">Bandwidth Consumer Agent</div>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.4;margin:2px 0 10px;">
+          Autonomously procures time-bound bandwidth from provider agents via atomic
+          on-chain escrow + ERC-721 credential.
+        </div>
+        <div style="font-size:10px;color:#aaa;display:flex;justify-content:space-between;
+                    padding:3px 0;border-top:1px dashed var(--border);">
+          <span style="color:#666;text-transform:uppercase;font-size:9px;">wallet</span>
+          <span style="font-family:ui-monospace,monospace;">{addr_short}</span></div>
+        <div style="font-size:10px;color:#aaa;display:flex;justify-content:space-between;
+                    padding:3px 0;border-top:1px dashed var(--border);">
+          <span style="color:#666;text-transform:uppercase;font-size:9px;">A2A endpoint</span>
+          <span>:8001/chat</span></div>
+        <div style="font-size:10px;color:#aaa;display:flex;justify-content:space-between;
+                    padding:3px 0;border-top:1px dashed var(--border);">
+          <span style="color:#666;text-transform:uppercase;font-size:9px;">model</span>
+          <span>{html_lib.escape(selected_model)}</span></div>
+
+        <div class="label">A2A Skills</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;">
+          <span style="background:#1a1a2e;border:1px solid #818cf855;color:#cfd6ff;
+                       font-size:10px;padding:2px 8px;border-radius:99px;">purchase_bandwidth</span>
+        </div>
+
+        <div class="label">MCP Tools</div>
+        {tool_rows}
+      </div>
+    ''', unsafe_allow_html=True)
+
+
 STAGES = [
     ("01", "Discovery",     "🔍", "browse_catalog"),
     ("02", "Quote",         "💬", "request_quote"),
@@ -184,3 +320,15 @@ def render_pipeline() -> None:
 # ── body ───────────────────────────────────────────────────────────────────
 render_header()
 render_pipeline()
+
+col_l, col_c, col_r = st.columns([1, 1.2, 1])
+with col_l:
+    render_consumer_panel()
+with col_c:
+    st.markdown('<div class="panel wire-panel"><div class="panel-title">A2A Wire</div>'
+                '<div style="color:var(--text-faint);font-size:11px;">— wired in next task —</div></div>',
+                unsafe_allow_html=True)
+with col_r:
+    st.markdown('<div class="panel provider-panel"><div class="panel-title">Provider Agent</div>'
+                '<div style="color:var(--text-faint);font-size:11px;">— wired in next task —</div></div>',
+                unsafe_allow_html=True)
