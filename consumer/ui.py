@@ -275,7 +275,9 @@ def render_wire_panel() -> None:
 
 
 def ingest_chat_response(turn: int, log: list[dict]) -> None:
-    """Merge a /chat response log into all cumulative session_state buckets."""
+    """Merge /chat log + poll provider /tool_log + poll consumer
+    /chain_events. Uses last_provider_ts_seen and last_block_seen as
+    watermarks so prior-turn entries aren't re-counted."""
     st.session_state.timeline = _merge_timeline(
         st.session_state.timeline, _parse_timeline(log, turn)
     )
@@ -283,6 +285,35 @@ def ingest_chat_response(turn: int, log: list[dict]) -> None:
         st.session_state.consumer_tool_log,
         _parse_consumer_tools_from_log(log, turn),
     )
+
+    since_ts = st.session_state.last_provider_ts_seen
+    try:
+        with httpx.Client(timeout=5.0) as c:
+            r = c.get(f"{PROVIDER_BASE_URL}/tool_log",
+                      params={"since_ts": since_ts})
+            r.raise_for_status()
+            entries = [e for e in r.json() if e.get("status") == "ok"]
+    except Exception:
+        entries = []
+    st.session_state.provider_tool_log = _merge_tool_log(
+        st.session_state.provider_tool_log,
+        [{"tool": e["tool"], "turn": turn} for e in entries],
+    )
+    if entries:
+        st.session_state.last_provider_ts_seen = max(e["ts"] for e in entries)
+
+    since_block = st.session_state.last_block_seen
+    try:
+        with httpx.Client(timeout=5.0) as c:
+            r = c.get(f"{CONSUMER_BASE_URL}/chain_events",
+                      params={"since_block": since_block})
+            r.raise_for_status()
+            new_events = r.json()
+    except Exception:
+        new_events = []
+    if new_events:
+        st.session_state.chain_events.extend(new_events)
+        st.session_state.last_block_seen = max(e["block"] for e in new_events)
 
 
 def render_consumer_panel() -> None:
@@ -330,6 +361,189 @@ def render_consumer_panel() -> None:
         {tool_rows}
       </div>
     ''', unsafe_allow_html=True)
+
+
+def render_provider_panel() -> None:
+    addr = _fetch_address(PROVIDER_BASE_URL) or "—"
+    addr_short = (addr[:6] + "…" + addr[-4:]) if addr != "—" else "—"
+    turn = st.session_state.turn
+
+    tool_rows = "".join(
+        _render_tool_row(name, tag, ambient,
+                         _tool_status(st.session_state.provider_tool_log, name, turn))
+        for name, tag, ambient in PROVIDER_TOOLS
+    )
+
+    skills_html = "".join(
+        f'<span style="background:#1a2535;border:1px solid #60a5fa55;color:#d4e4ff;'
+        f'font-size:10px;padding:2px 8px;border-radius:99px;">{s}</span>'
+        for s in ("get_catalog", "request_quote", "activate")
+    )
+
+    st.markdown(f'''
+      <div class="panel provider-panel">
+        <div class="panel-title">
+          <span>🏪 Provider Agent</span>
+          <span class="meta">v2.0.0</span>
+        </div>
+        <div style="font-size:13px;font-weight:600;color:#f0f0f8;">Bandwidth Provider Agent</div>
+        <div style="font-size:10px;color:var(--text-dim);line-height:1.4;margin:2px 0 10px;">
+          Sells time-bound bandwidth via atomic on-chain escrow + ERC-721 credential.
+          Activates SDN policy on credential presentation.
+        </div>
+        <div style="font-size:10px;color:#aaa;display:flex;justify-content:space-between;
+                    padding:3px 0;border-top:1px dashed var(--border);">
+          <span style="color:#666;text-transform:uppercase;font-size:9px;">wallet</span>
+          <span style="font-family:ui-monospace,monospace;">{addr_short}</span></div>
+        <div style="font-size:10px;color:#aaa;display:flex;justify-content:space-between;
+                    padding:3px 0;border-top:1px dashed var(--border);">
+          <span style="color:#666;text-transform:uppercase;font-size:9px;">A2A endpoint</span>
+          <span>:8002/a2a</span></div>
+        <div style="font-size:10px;color:#aaa;display:flex;justify-content:space-between;
+                    padding:3px 0;border-top:1px dashed var(--border);">
+          <span style="color:#666;text-transform:uppercase;font-size:9px;">SDN</span>
+          <span>{"mock" if SDN_MOCK else "real"}</span></div>
+
+        <div class="label">A2A Skills</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;">{skills_html}</div>
+
+        <div class="label">MCP Tools</div>
+        {tool_rows}
+      </div>
+    ''', unsafe_allow_html=True)
+
+
+def render_chat_panel() -> None:
+    st.markdown('<div class="panel agent-panel"><div class="panel-title">'
+                '<span>👤 Human → Consumer</span>'
+                '<span class="meta">intent · reasoning trace</span></div>',
+                unsafe_allow_html=True)
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+            if msg.get("thinking"):
+                with st.expander("Thinking", expanded=False):
+                    for t in msg["thinking"]:
+                        st.write(t)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_chain_panel() -> None:
+    events = st.session_state.chain_events
+    if not events:
+        rows_html = ('<div style="color:var(--text-faint);font-size:11px;'
+                     'padding:6px 0;">No on-chain events yet.</div>')
+    else:
+        rows = []
+        for e in events:
+            args_str = ", ".join(f"{k}={v}" for k, v in (e.get("args") or {}).items())
+            if len(args_str) > 60:
+                args_str = args_str[:57] + "..."
+            rows.append(
+                f'<div style="font-family:ui-monospace,monospace;font-size:10px;'
+                f'color:#bbb;padding:5px 8px;border-bottom:1px solid var(--border-soft);">'
+                f'<span style="color:#f59e0b;">{html_lib.escape(e["event"])}</span> '
+                f'<span style="color:#888;">{html_lib.escape(args_str)}</span>'
+                f'<span style="color:#666;float:right;">block {e["block"]} · gas {e["gas"]:,}</span>'
+                f'</div>'
+            )
+        rows_html = "".join(rows)
+
+    st.markdown(f'''
+      <div class="panel chain-panel">
+        <div class="panel-title">
+          <span>⛓ On-chain Events</span>
+          <span class="meta">Anvil · {len(events)} events</span>
+        </div>
+        {rows_html}
+      </div>
+    ''', unsafe_allow_html=True)
+
+
+def _active_token_id() -> int | None:
+    """Find the most recent tokenId mentioned in the timeline."""
+    for item in reversed(st.session_state.timeline):
+        if item["kind"] == "chain" and "tokenId=" in item["text"]:
+            m = re.search(r"tokenId=(\d+)", item["text"])
+            if m:
+                return int(m.group(1))
+    return None
+
+
+def render_nft_strip() -> None:
+    tid = _active_token_id()
+    if tid is None:
+        st.markdown(
+            '<div style="background:#0f1410;border:1px solid #22c55e22;border-radius:8px;'
+            'padding:10px 14px;font-size:11px;color:var(--text-faint);margin-bottom:12px;">'
+            '🪪 NFT credential — no active credential yet</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    try:
+        with httpx.Client(timeout=5.0) as c:
+            r = c.get(f"{CONSUMER_BASE_URL}/check_token", params={"tokenId": tid})
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        st.markdown(
+            f'<div style="color:#f87171;font-size:11px;">NFT lookup failed: {html_lib.escape(str(e))}</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    owner_short = data["owner"][:6] + "…" + data["owner"][-4:]
+    sdn_rule = f"policer {data['bandwidth_mbps']} Mbps · {data['endpoint'].replace('clab://', '')}"
+    st.markdown(f'''
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;
+                  padding:10px 14px;background:#0f1410;border:1px solid #22c55e55;
+                  border-radius:8px;font-size:10px;margin-bottom:12px;">
+        <div><div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:0.4px;
+                        margin-bottom:3px;">Token ID</div>
+             <div style="color:#a7e8c4;font-family:ui-monospace,monospace;">{tid}</div></div>
+        <div><div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:0.4px;
+                        margin-bottom:3px;">Owner</div>
+             <div style="color:#a7e8c4;font-family:ui-monospace,monospace;">{owner_short}</div></div>
+        <div><div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:0.4px;
+                        margin-bottom:3px;">Status</div>
+             <div style="color:#a7e8c4;font-family:ui-monospace,monospace;">{html_lib.escape(data["status"])} · {data["seconds_remaining"]}s</div></div>
+        <div><div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:0.4px;
+                        margin-bottom:3px;">SDN Rule</div>
+             <div style="color:#a7e8c4;font-family:ui-monospace,monospace;">{html_lib.escape(sdn_rule)}</div></div>
+        <div><div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:0.4px;
+                        margin-bottom:3px;">QoS</div>
+             <div style="color:#a7e8c4;font-family:ui-monospace,monospace;">guaranteed</div></div>
+      </div>
+    ''', unsafe_allow_html=True)
+
+
+def render_iperf_expander() -> None:
+    tid = _active_token_id()
+    with st.expander("📡 Bandwidth probe (iperf3)", expanded=False):
+        if tid is None:
+            st.caption("No active credential.")
+            return
+        if st.button("Run iperf3 probe"):
+            try:
+                with httpx.Client(timeout=30.0) as c:
+                    r = c.post(f"{CONSUMER_BASE_URL}/probe_proxy", json={"tokenId": tid})
+                    r.raise_for_status()
+                    st.session_state.probe_samples.append(r.json())
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Probe failed: {e}")
+        if st.session_state.probe_samples:
+            chart_data = {
+                "measured_mbps": [s["measured_mbps"] for s in st.session_state.probe_samples],
+                "expected_mbps": [s["expected_mbps"] for s in st.session_state.probe_samples],
+            }
+            st.line_chart(chart_data, height=200)
+            last = st.session_state.probe_samples[-1]
+            st.caption(
+                f"last: {last['src_ce']} → {last['dst_ce']} "
+                f"{last['measured_mbps']:.2f} / {last['expected_mbps']:.1f} Mbps"
+            )
 
 
 STAGES = [
@@ -421,9 +635,16 @@ with col_l:
 with col_c:
     render_wire_panel()
 with col_r:
-    st.markdown('<div class="panel provider-panel"><div class="panel-title">Provider Agent</div>'
-                '<div style="color:var(--text-faint);font-size:11px;">— wired in next task —</div></div>',
-                unsafe_allow_html=True)
+    render_provider_panel()
+
+bottom_l, bottom_r = st.columns([1, 1])
+with bottom_l:
+    render_chat_panel()
+with bottom_r:
+    render_chain_panel()
+
+render_nft_strip()
+render_iperf_expander()
 
 
 user_input = st.chat_input("Ask the consumer agent…")
