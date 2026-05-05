@@ -1,14 +1,29 @@
 [project]
 name = "ollama-agent-simulation"
 version = "0.1.0"
-description = "Add your description here"
-requires-python = ">=3.11"
+description = "Proof-of-concept: two AI agents negotiate and pay for network bandwidth using MCP, A2A, and an Ethereum smart-contract escrow."
+requires-python = ">=3.13"
 dependencies = [
+    "a2a-sdk>=1.0,<2.0",
     "eth-account>=0.11.3",
     "fastapi>=0.136.0",
+    "fastmcp>=3.2.4",
     "httpx>=0.28.1",
+    "langchain-ollama>=1.1.0",
+    "langgraph>=1.1.10",
     "ollama>=0.6.1",
+    "protobuf>=5,<7",
+    "srl-bandwidth",
     "streamlit>=1.56.0",
     "uvicorn[standard]>=0.44.0",
     "web3>=6.0,<7",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+]
+
+[tool.uv.sources]
+srl-bandwidth = { git = "https://github.com/musel25/srl-gnmi-bandwidth-poc.git", rev = "ea2c5638e8eb0af529c6c33166e2a7274ad109cb" }

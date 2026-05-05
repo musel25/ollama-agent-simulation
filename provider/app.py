@@ -1,30 +1,49 @@
 """
 Provider agent FastAPI service — port 8002.
-Serves catalog and quote endpoints; runs an AgreementRequested event-listener
-background task that mints an NFT and calls deposit() to complete the swap.
+
+Serves catalog, quote and address endpoints; mounts the FastMCP server at /mcp;
+runs an AgreementRequested event-listener that drives mint+swap through the
+provider's own MCP via in-memory FastMCP Client.
 """
 import asyncio
-import fcntl
-import json
+import json as _json
 import logging
 import os
-import secrets
 import time
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 import uvicorn
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
+from a2a.server.tasks import InMemoryTaskStore
 from eth_account import Account
 from fastapi import FastAPI, HTTPException
+from fastmcp import Client as MCPClient
+from google.protobuf.json_format import MessageToDict
 from pydantic import BaseModel
 from web3 import Web3
 
+from provider.agent_card import build_provider_agent_card
+from provider.agent_executor import BandwidthProviderExecutor
+from provider.expiry import expiry_sweep_loop
+from provider.catalog import (
+    CATALOG_BY_ID,
+    cleanup_quotes,
+    get_catalog_with_availability,
+    make_quote,
+    pending_quotes,
+    slot_pool,
+)
+from provider.mcp_server import mcp, tool_call_log
 from shared.contracts import get_escrow_contract, get_nft_contract
+
+# CE peer pairs across pe1 ↔ pe2 (defined by the clab topology in
+# srl-gnmi-bandwidth-poc/topology). Used by /probe to pick the iperf3 peer.
+CE_PEER = {"ce1": "ce2", "ce2": "ce1", "ce3": "ce4", "ce4": "ce3"}
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("provider")
 
-# ── Ethereum setup ─────────────────────────────────────────────────────────────
 RPC_URL = os.environ.get("RPC_URL", "http://localhost:8545")
 PROVIDER_PRIVATE_KEY = os.environ["PROVIDER_PRIVATE_KEY"]
 
@@ -32,142 +51,18 @@ w3 = Web3(Web3.HTTPProvider(RPC_URL))
 provider_account = Account.from_key(PROVIDER_PRIVATE_KEY)
 PROVIDER_ADDRESS = provider_account.address
 
-# ── Catalog (hardcoded tiers, inventory tracks slots separately) ───────────────
-CATALOG = [
-    {"packageId": "small",  "mbps": 50,  "durationSeconds": 600, "priceWei": Web3.to_wei(0.01, "ether")},
-    {"packageId": "medium", "mbps": 100, "durationSeconds": 600, "priceWei": Web3.to_wei(0.02, "ether")},
-    {"packageId": "large",  "mbps": 500, "durationSeconds": 600, "priceWei": Web3.to_wei(0.08, "ether")},
-]
-CATALOG_BY_ID = {p["packageId"]: p for p in CATALOG}
-
-# ── Inventory (per-tier JSON-lines with lease expiry) ─────────────────────────
-INVENTORY_FILE = Path(__file__).parent / "inventory.txt"
+_provider_agent_card = build_provider_agent_card()
+_AGENT_CARD_JSON = MessageToDict(_provider_agent_card, preserving_proto_field_name=True)
 
 
-def _read_inventory_locked(f) -> list[dict]:
-    f.seek(0)
-    rows = []
-    now = time.time()
-    for line in f.read().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        row = json.loads(line)
-        # Prune expired leases on read
-        row["activeLeases"] = [l for l in row["activeLeases"] if l["expiresAt"] > now]
-        rows.append(row)
-    return rows
+_handler_tasks: set[asyncio.Task] = set()
 
 
-def _write_inventory_locked(f, rows: list[dict]) -> None:
-    f.seek(0)
-    f.truncate()
-    for row in rows:
-        f.write(json.dumps(row) + "\n")
-
-
-def _available_slots(row: dict) -> int:
-    now = time.time()
-    active = sum(1 for l in row["activeLeases"] if l["expiresAt"] > now)
-    return row["totalSlots"] - active
-
-
-def get_catalog_with_availability() -> list[dict]:
-    with open(INVENTORY_FILE, "r+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            rows = _read_inventory_locked(f)
-            _write_inventory_locked(f, rows)  # persist pruned leases
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
-    row_by_tier = {r["tier"]: r for r in rows}
-    result = []
-    for pkg in CATALOG:
-        row = row_by_tier.get(pkg["packageId"], {})
-        available = _available_slots(row) if row else 0
-        result.append({**pkg, "availableSlots": available})
-    return result
-
-
-def decrement_inventory(tier: str, agreement_id: int, duration_seconds: int) -> bool:
-    """Reserve one slot for the given tier. Returns True if successful."""
-    with open(INVENTORY_FILE, "r+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            rows = _read_inventory_locked(f)
-            for row in rows:
-                if row["tier"] == tier:
-                    if _available_slots(row) <= 0:
-                        return False
-                    row["activeLeases"].append({
-                        "agreementId": agreement_id,
-                        "expiresAt": time.time() + duration_seconds,
-                    })
-                    _write_inventory_locked(f, rows)
-                    return True
-            return False
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
-
-
-def rewind_inventory(tier: str, agreement_id: int) -> None:
-    """Remove a lease from inventory (called on mint/deposit failure)."""
-    with open(INVENTORY_FILE, "r+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            rows = _read_inventory_locked(f)
-            for row in rows:
-                if row["tier"] == tier:
-                    row["activeLeases"] = [
-                        l for l in row["activeLeases"] if l["agreementId"] != agreement_id
-                    ]
-            _write_inventory_locked(f, rows)
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
-
-
-# ── Pending quotes ─────────────────────────────────────────────────────────────
-pending_quotes: dict[int, dict] = {}
-QUOTE_TTL = 60  # seconds
-
-
-def _cleanup_quotes() -> None:
-    now = time.time()
-    expired = [k for k, v in pending_quotes.items() if v["expires"] < now]
-    for k in expired:
-        del pending_quotes[k]
-
-
-# ── Chain helpers ──────────────────────────────────────────────────────────────
-def _send_tx(func, value: int = 0) -> str:
-    tx = func.build_transaction({
-        "from": PROVIDER_ADDRESS,
-        "nonce": w3.eth.get_transaction_count(PROVIDER_ADDRESS, "pending"),
-        "value": value,
-    })
-    signed = w3.eth.account.sign_transaction(tx, PROVIDER_PRIVATE_KEY)
-    raw_tx = getattr(signed, "raw_transaction", None) or signed.rawTransaction
-    tx_hash = w3.eth.send_raw_transaction(raw_tx)
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
-    if receipt["status"] != 1:
-        raise RuntimeError(f"Transaction reverted: {tx_hash.hex()}")
-    return tx_hash.hex(), receipt
-
-
-def _extract_token_id(receipt) -> int:
-    transfer_topic = Web3.keccak(text="Transfer(address,address,uint256)").hex()
-    for entry in receipt["logs"]:
-        if entry["topics"][0].hex() == transfer_topic:
-            return int(entry["topics"][3].hex(), 16)
-    raise RuntimeError("Transfer event not found in mint receipt")
-
-
-# ── Event listener ─────────────────────────────────────────────────────────────
 async def _event_listener() -> None:
-    nft = get_nft_contract(w3)
     escrow = get_escrow_contract(w3)
-    log.info("Event listener started, watching AgreementRequested...")
     last_block = w3.eth.block_number
+    log.info("Event listener started, watching AgreementRequested at %s from block %d",
+             escrow.address, last_block)
 
     while True:
         await asyncio.sleep(2)
@@ -178,20 +73,24 @@ async def _event_listener() -> None:
             events = escrow.events.AgreementRequested.get_logs(
                 fromBlock=last_block + 1, toBlock=current
             )
+            if events:
+                log.info("Saw %d AgreementRequested event(s) in blocks %d..%d",
+                         len(events), last_block + 1, current)
             last_block = current
             for evt in events:
                 args = evt["args"]
-                asyncio.create_task(
-                    _handle_agreement(nft, escrow, args["agreementId"], args)
+                t = asyncio.create_task(
+                    _handle_agreement(escrow, args["agreementId"], args)
                 )
+                _handler_tasks.add(t)
+                t.add_done_callback(_handler_tasks.discard)
         except Exception as e:
-            log.error(f"Event listener error: {e}")
+            log.exception("Event listener error: %s", e)
 
 
-async def _handle_agreement(nft, escrow, agreement_id: int, args: dict) -> None:
-    _cleanup_quotes()
+async def _handle_agreement(escrow, agreement_id: int, args: dict) -> None:
+    cleanup_quotes()
     quote = pending_quotes.get(agreement_id)
-
     if not quote or time.time() > quote["expires"]:
         log.warning(f"No valid quote for agreementId={agreement_id}, skipping.")
         return
@@ -201,62 +100,60 @@ async def _handle_agreement(nft, escrow, agreement_id: int, args: dict) -> None:
         log.error(f"Unknown packageId in quote for agreementId={agreement_id}")
         return
 
-    # Verify on-chain params match quote
     ag = escrow.functions.getAgreement(agreement_id).call()
-    # tuple: consumer, provider, bandwidthMbps, durationSeconds, priceWei, deadline, tokenId, status
     if ag[2] != pkg["mbps"] or ag[3] != pkg["durationSeconds"] or ag[4] != pkg["priceWei"]:
         log.error(f"Param mismatch for agreementId={agreement_id}")
         return
 
-    # Step 1: Decrement inventory (reserve slot)
-    if not decrement_inventory(pkg["packageId"], agreement_id, pkg["durationSeconds"]):
+    slot = slot_pool.reserve(pkg["packageId"], agreement_id, pkg["durationSeconds"])
+    if slot is None:
         log.error(f"No slots available for tier={pkg['packageId']}, agreementId={agreement_id}")
         return
 
-    token_id = None
     try:
-        # Step 2: Mint NFT to provider address
-        log.info(f"Minting NFT for agreementId={agreement_id}...")
-        tx_mint, receipt_mint = _send_tx(
-            nft.functions.mint(
-                PROVIDER_ADDRESS,
-                agreement_id,
-                pkg["mbps"],
-                pkg["durationSeconds"],
-                "grpc://provider:8003",
+        async with MCPClient(mcp) as client:
+            mint_result = await client.call_tool(
+                "mint_credential",
+                {
+                    "agreement_id": agreement_id,
+                    "consumer_address": args["consumer"],
+                    "pe": slot.pe,
+                    "subinterface": slot.subinterface,
+                    "ce": slot.ce,
+                    "mbps": pkg["mbps"],
+                    "duration_seconds": pkg["durationSeconds"],
+                },
             )
-        )
-        token_id = _extract_token_id(receipt_mint)
-        log.info(f"Minted tokenId={token_id} tx={tx_mint}")
+            mint_data = _json.loads(mint_result.content[0].text)
+            token_id = int(mint_data["tokenId"])
+            log.info(f"Minted tokenId={token_id} on slot {slot} for agreementId={agreement_id}")
 
-        # Step 3: Approve escrow to transfer the NFT
-        escrow_address = escrow.address
-        tx_approve, _ = _send_tx(nft.functions.approve(escrow_address, token_id))
-        log.info(f"Approved escrow tx={tx_approve}")
-
-        # Step 4: Call deposit — triggers atomic swap
-        tx_deposit, _ = _send_tx(escrow.functions.deposit(agreement_id, token_id))
-        log.info(f"Deposit complete agreementId={agreement_id} tx={tx_deposit}")
+            await client.call_tool(
+                "complete_swap",
+                {"agreement_id": agreement_id, "token_id": token_id},
+            )
+            log.info(f"Swap complete agreementId={agreement_id} tokenId={token_id}")
 
         del pending_quotes[agreement_id]
 
     except Exception as e:
-        log.error(f"Error in deposit flow agreementId={agreement_id}: {e}")
-        if token_id is None:
-            # Mint failed — safe to rewind inventory
-            rewind_inventory(pkg["packageId"], agreement_id)
-            log.info(f"Inventory rewound for tier={pkg['packageId']}")
-        else:
-            log.error(
-                f"NFT tokenId={token_id} is orphaned (minted but swap failed). Manual cleanup needed."
-            )
+        log.error(f"Error in mint/swap flow agreementId={agreement_id}: {e}")
+        slot_pool.release(agreement_id)
 
 
-# ── FastAPI app ────────────────────────────────────────────────────────────────
+_mcp_http_app = mcp.http_app()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    asyncio.create_task(_event_listener())
-    yield
+    async with _mcp_http_app.lifespan(app):
+        listener_task = asyncio.create_task(_event_listener())
+        expiry_task = asyncio.create_task(expiry_sweep_loop(period_seconds=30))
+        try:
+            yield
+        finally:
+            listener_task.cancel()
+            expiry_task.cancel()
 
 
 app = FastAPI(title="Bandwidth Provider", lifespan=lifespan)
@@ -267,35 +164,29 @@ class QuoteRequest(BaseModel):
     consumerAddress: str
 
 
-@app.get("/catalog")
+@app.get("/.well-known/agent-card.json")
+def agent_card_canonical() -> dict:
+    return _AGENT_CARD_JSON
+
+
+@app.get("/.well-known/agent.json")
+def agent_card_legacy() -> dict:
+    return _AGENT_CARD_JSON
+
+
+# /catalog and /quote are debug-only mirrors of the A2A skills. Inter-agent
+# traffic must go over A2A so the agent card / skill schema stays the contract.
+@app.get("/_debug/catalog")
 def get_catalog() -> list[dict]:
     return get_catalog_with_availability()
 
 
-@app.post("/quote")
+@app.post("/_debug/quote")
 def request_quote(req: QuoteRequest) -> dict:
-    pkg = CATALOG_BY_ID.get(req.packageId)
-    if pkg is None:
-        raise HTTPException(404, f"Package '{req.packageId}' not found.")
-
-    catalog = get_catalog_with_availability()
-    tier_info = next((c for c in catalog if c["packageId"] == req.packageId), None)
-    if not tier_info or tier_info["availableSlots"] <= 0:
-        raise HTTPException(409, f"No slots available for '{req.packageId}'.")
-
-    agreement_id = int.from_bytes(secrets.token_bytes(16), "big")
-    pending_quotes[agreement_id] = {
-        "packageId": req.packageId,
-        "consumerAddress": req.consumerAddress,
-        "expires": time.time() + QUOTE_TTL,
-    }
-
-    return {
-        "agreementId": agreement_id,
-        "priceWei": pkg["priceWei"],
-        "bandwidthMbps": pkg["mbps"],
-        "durationSeconds": pkg["durationSeconds"],
-    }
+    quote = make_quote(req.packageId, req.consumerAddress)
+    if quote is None:
+        raise HTTPException(409, f"No slots available for '{req.packageId}' or package not found.")
+    return quote
 
 
 @app.get("/inventory")
@@ -306,6 +197,68 @@ def get_inventory() -> list[dict]:
 @app.get("/address")
 def provider_address() -> dict:
     return {"address": PROVIDER_ADDRESS}
+
+
+class ProbeRequest(BaseModel):
+    tokenId: int
+
+
+@app.post("/probe")
+async def probe(req: ProbeRequest) -> dict:
+    nft = get_nft_contract(w3)
+    try:
+        agreement_id, mbps, _duration, _start, _endpoint = (
+            nft.functions.getTokenMetadata(int(req.tokenId)).call()
+        )
+    except Exception:
+        raise HTTPException(404, f"token {req.tokenId} does not exist")
+
+    slot = slot_pool.lookup(int(agreement_id))
+    if slot is None:
+        raise HTTPException(409, f"no active slot bound to agreement {agreement_id}")
+
+    dst_ce = CE_PEER.get(slot.ce)
+    if dst_ce is None:
+        raise HTTPException(500, f"no peer mapping for {slot.ce}")
+
+    async with MCPClient(mcp) as client:
+        result = await client.call_tool(
+            "verify_bandwidth",
+            {"src_ce": slot.ce, "dst_ce": dst_ce, "expected_mbps": float(mbps)},
+        )
+        verify = _json.loads(result.content[0].text)
+
+    return {
+        "timestamp": time.time(),
+        "src_ce": slot.ce,
+        "dst_ce": dst_ce,
+        "expected_mbps": float(mbps),
+        "measured_mbps": float(verify.get("measured_mbps", 0.0)),
+        "passed": bool(verify.get("passed", False)),
+        "message": verify.get("message", ""),
+    }
+
+
+@app.get("/tool_log")
+def get_tool_log(since_ts: float | None = None) -> list[dict]:
+    entries = list(tool_call_log)
+    if since_ts is not None:
+        entries = [e for e in entries if e["ts"] > since_ts]
+    return entries
+
+
+_a2a_handler = DefaultRequestHandler(
+    agent_executor=BandwidthProviderExecutor(),
+    task_store=InMemoryTaskStore(),
+    agent_card=_provider_agent_card,
+)
+for route in create_agent_card_routes(_provider_agent_card):
+    app.router.routes.append(route)
+for route in create_jsonrpc_routes(_a2a_handler, "/a2a"):
+    app.router.routes.append(route)
+
+# MCP mounted last so all preceding routes are matched first by Starlette's router.
+app.mount("/", _mcp_http_app)
 
 
 if __name__ == "__main__":

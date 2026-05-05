@@ -2,254 +2,79 @@
 
 > Two AI agents negotiate and pay for internet bandwidth — entirely on-chain, running on your laptop.
 
-This is a proof-of-concept where a **Consumer AI** and a **Provider AI** talk to each other over HTTP, agree on a bandwidth package, and settle the payment using a real Ethereum smart contract (running locally). No real money, no real internet traffic — just a working demonstration of what autonomous AI-to-AI commerce could look like.
+A working proof-of-concept where a **Consumer AI** and a **Provider AI** interact using the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), an Agent-to-Agent (A2A) protocol, and an Ethereum smart-contract escrow. Settles a real trade (no real money, no real bandwidth — local Anvil chain, mock or real SDN).
 
----
-
-## What actually happens when you run it
-
-1. You open a chat UI and type something like *"I need 100 Mbps for 10 minutes"*.
-2. A **Consumer Agent** (an LLM running locally via Ollama) reads your message and decides which bandwidth tier to buy.
-3. The Consumer Agent calls the **Provider Agent** to get a price quote.
-4. It locks ETH into a smart contract (on a local test blockchain — no real money).
-5. The Provider mints an **NFT** that proves you own the bandwidth service, and the escrow releases the ETH to the provider atomically.
-6. The Consumer Agent calls the **Gateway** (which checks the NFT on-chain) and reports back your active service details.
-
-All of this happens automatically — you just watch the agents work.
-
----
-
-## Architecture
-
-```
-You (browser)
-   │  type a message
-   ▼
-Consumer UI  (:8501)        ← Streamlit web app
-   │  POST /chat
-   ▼
-Consumer Agent  (:8001)     ← FastAPI + Ollama LLM
-   │
-   ├─ GET /catalog  ──────────────────────────► Provider Agent  (:8002)
-   │                                              returns available packages + prices
-   │
-   ├─ POST /quote  ──────────────────────────► Provider Agent  (:8002)
-   │    agreementId ◄────────────────────────┘
-   │
-   ├─ requestAgreement()  ───────────────────► BandwidthEscrow  (Anvil :8545)
-   │    Consumer locks ETH on-chain             Smart contract holds funds
-   │                                            Provider sees AgreementRequested event
-   │                                            Provider mints NFT → BandwidthNFT
-   │                                            Provider calls deposit()
-   │                                            Atomic swap: ETH → Provider, NFT → Consumer
-   │
-   └─ GET /service  ─────────────────────────► Gateway  (:8003)
-        (signed nonce + tokenId)               checks ownerOf() on-chain
-        service details ◄────────────────────┘
-```
-
-### Services at a glance
-
-| Service | Port | What it does |
-|---------|------|-------------|
-| Anvil (local blockchain) | 8545 | Runs a fake Ethereum chain for testing |
-| Provider Agent | 8002 | Sells bandwidth — serves catalog, quotes, and listens for on-chain events |
-| Gateway | 8003 | Verifies NFT ownership before giving access to the service |
-| Consumer Agent | 8001 | Buys bandwidth — the LLM lives here |
-| Consumer UI | 8501 | The chat interface you talk to |
-
----
-
-## Prerequisites
-
-You need four tools installed before starting:
-
-### 1. Foundry (Ethereum dev toolkit)
-```bash
-curl -L https://foundry.paradigm.xyz | bash
-foundryup
-```
-This gives you `anvil` (a local blockchain) and `forge` (to compile/deploy contracts).
-
-### 2. Docker + Docker Compose v2
-Install from [docker.com](https://docs.docker.com/get-docker/). Make sure `docker compose version` shows v2.x.
-
-### 3. Ollama (runs AI models locally)
-Install from [ollama.com](https://ollama.com/), then pull the model:
-```bash
-ollama pull ministral:3b
-```
-This downloads a ~2 GB AI model that the agents will use to think and talk.
-
-> **Why ministral:3b?** It's small enough to run on most laptops without a GPU, and it supports tool-calling (the feature that lets the LLM call functions like `query_provider_catalog`).
-
-### 4. uv (Python package manager)
-```bash
-pip install uv
-```
+This README is a landing page. The full documentation lives in [`docs/`](docs/).
 
 ---
 
 ## Quickstart
 
-### Option A — Docker (recommended, everything in one command)
-
 ```bash
-# 1. Copy the example environment file
+# 1. Install prereqs (see docs/05-running.md for details):
+#    Foundry, Docker, Ollama, uv
+
+# 2. Copy the example env file
 cp .env.example .env
 
-# 2. Build and start all services
+# 3. Bring everything up
 make up
 
-# 3. Open the UI in your browser
-open http://localhost:8501
+# 4. Open the UI
+xdg-open http://localhost:8501   # or just open it in your browser
 
-# 4. Stop everything when done
-make down
-```
-
-That's it. Docker Compose will:
-- Start a local Ethereum chain (Anvil)
-- Deploy the smart contracts
-- Pull the Ollama model inside the container
-- Start the provider, gateway, consumer agent, and UI
-
-> **First run takes a few minutes** — it needs to build Docker images and pull the ~2 GB AI model.
-
-### Option B — Run locally (no Docker)
-
-Useful for development. Open six terminals:
-
-```bash
-# Terminal 1: Local blockchain
-anvil --block-time 1
-
-# Terminal 2: Deploy the smart contracts
-source .env
-cd contracts && forge script script/Deploy.s.sol \
-  --rpc-url http://localhost:8545 \
-  --broadcast \
-  --private-key $DEPLOYER_PRIVATE_KEY
-
-# Terminal 3: Provider service (catalog + quotes + event listener)
-source .env && uv run uvicorn provider.app:app --port 8002
-
-# Terminal 4: Gateway (NFT-gated access check)
-source .env && uv run uvicorn provider.gateway:app --port 8003
-
-# Terminal 5: Consumer agent (LLM lives here)
-source .env && uv run uvicorn consumer.app:app --port 8001
-
-# Terminal 6: Web UI
-source .env && uv run streamlit run consumer/ui.py
-```
-
----
-
-## Usage
-
-Once running, go to **http://localhost:8501** and type a message like:
-
-- *"I need 100 Mbps for 10 minutes"*
-- *"Buy me the cheapest bandwidth package"*
-- *"What bandwidth options are available?"*
-
-The right panel shows the raw agent-to-agent conversation so you can see every HTTP call and on-chain transaction happening in real time.
-
-### Scripted demo (no browser needed)
-
-```bash
+# 5. Try the scripted demo (no browser needed)
 make demo
 ```
 
-This runs a full purchase flow via `curl` and prints the output at each step.
+If `make demo` reports an active service with a `tokenId`, the whole stack works.
+
+To stop everything: `make down` (or `make down-clean` to wipe state too).
 
 ---
 
-## Project Structure
+## Where to read next
+
+| If you want to... | Read |
+|---|---|
+| Understand what this is and why it exists | [`docs/01-introduction.md`](docs/01-introduction.md) |
+| Learn the words used in everything else | [`docs/02-concepts.md`](docs/02-concepts.md) |
+| See a successful run, stage by stage | [`docs/03-walkthrough.md`](docs/03-walkthrough.md) |
+| Read or modify the code | [`docs/04-architecture.md`](docs/04-architecture.md) |
+| Get it running on your machine | [`docs/05-running.md`](docs/05-running.md) |
+| Change something safely | [`docs/06-modifying.md`](docs/06-modifying.md) |
+| Understand how the code maps to the paper | [`docs/paper-alignment.md`](docs/paper-alignment.md) |
+
+If you've never seen this project before: read those docs in the order listed.
+
+---
+
+## Repo layout
 
 ```
-contracts/
-  src/
-    BandwidthNFT.sol        ERC-721 token — proves you own the bandwidth service
-    BandwidthEscrow.sol     Holds ETH + NFT and swaps them atomically
-  script/
-    Deploy.s.sol            Deploys both contracts, saves addresses to local.json
-  deployments/
-    local.json              Auto-generated: contract addresses after deployment
-
-consumer/
-  app.py                    FastAPI :8001 — the LLM reasoning loop runs here
-  ui.py                     Streamlit :8501 — the chat UI (thin HTTP client)
-
-provider/
-  app.py                    FastAPI :8002 — catalog, quotes, AgreementRequested listener
-  gateway.py                FastAPI :8003 — checks NFT ownership before serving data
-  inventory.txt             Per-tier slot counts with lease expiration timestamps
-
-shared/
-  contracts.py              Loads deployed contract addresses + Web3 contract objects
-  abi/                      ABI files copied from Foundry build artifacts
-
-docs/
-  decisions.md              Why we made every non-obvious technical decision
+.
+├── consumer/         # Buyer agent: FastAPI + Ollama + MCP client + A2A client
+├── provider/         # Seller agent: FastAPI + MCP server + A2A executor + SDN tools
+├── shared/           # Cross-agent code: A2A message types, ABIs, slot pool
+├── contracts/        # Solidity contracts (BandwidthEscrow + BandwidthNFT) + Foundry scripts
+├── tests/            # Pytest suite covering all of the above
+├── docs/             # This documentation set
+└── paper/            # Companion research paper (separate git repo)
 ```
 
 ---
 
-## What this PoC does and doesn't do
+## Tech at a glance
 
-**Does:**
-- End-to-end A2A negotiation: consumer LLM interprets natural language, picks a package, and completes payment without human help
-- Double-escrow atomic swap: ETH from consumer and NFT from provider are exchanged in a single `deposit()` transaction — neither party can cheat
-- Fully on-chain NFT entitlement: `bandwidthMbps`, `durationSeconds`, `startTime`, and `endpoint` stored directly in the token (no IPFS)
-- NFT-gated gateway: access is verified by checking `ownerOf()` on-chain using a signed Ethereum nonce (replay-safe)
-- Per-tier slot inventory with time-based lease expiration
-
-**Does not:**
-- Enforce bandwidth at the network layer (no QoS, no traffic shaping, no real hardware)
-- Use an oracle to verify the bandwidth was actually delivered
-- Support multi-round price negotiation (one quote, take it or leave it)
-- Accept ERC-20 token payments (native ETH only)
-- Deploy to a real network (Anvil only, test accounts with no real value)
-- Use DID / verifiable credentials (identity = Ethereum address)
+- **Python 3.13** with `uv` for environment management
+- **FastAPI** for the agent HTTP servers, **Streamlit** for the UI
+- **FastMCP** for the MCP servers, **a2a-sdk** for inter-agent calls
+- **Ollama** running `llama3.2:3b` locally (swappable; see [`docs/05-running.md`](docs/05-running.md))
+- **Solidity 0.8.x** + **Foundry/Anvil** for the smart-contract layer
+- **`tc tbf`** + **gNMI** for SDN bandwidth enforcement (mock by default; real path uses [`srl-gnmi-bandwidth-poc`](https://github.com/musel25/srl-gnmi-bandwidth-poc))
 
 ---
 
-## Changing the AI model
+## Status
 
-The default model is `ministral:3b`. To try a different one:
-
-```bash
-# Pull a different model
-ollama pull qwen3:4b
-
-# Use it (set before running make up, or pick it in the UI sidebar)
-OLLAMA_MODEL=qwen3:4b make up
-```
-
-Models that support tool-calling work best. Tested models: `ministral:3b`, `qwen3:4b`, `qwen3:1.7b`.
-
----
-
-## Troubleshooting
-
-**`Error 404: model not found`**
-The model isn't pulled yet. Run `ollama pull ministral:3b` (or whichever model is selected).
-
-**`make up` fails at the deployer step**
-Anvil might still be starting. Run `make down` then `make up` again.
-
-**UI shows "Error reaching consumer agent"**
-The consumer agent container might still be starting. Wait 30 seconds and refresh.
-
-**Transactions revert on-chain**
-The contracts may not be deployed yet — check with `docker compose logs deployer`.
-
----
-
-## See Also
-
-- [`docs/decisions.md`](docs/decisions.md) — Every non-obvious architectural decision, with reasoning.
-- [Foundry Book](https://book.getfoundry.sh/) — Learn how the smart contracts work.
-- [Ollama docs](https://github.com/ollama/ollama) — How to run and configure local models.
+Active prototype on the `feat/mcp-a2a` branch. Companion to a research paper currently in progress (see `paper/`).

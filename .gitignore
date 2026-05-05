@@ -4,4 +4,9 @@ __pycache__/
 contracts/out/
 contracts/cache/
 contracts/lib/
+contracts/deployments/local.json
 .superpowers/
+.claude/
+.pytest_cache/
+.venv/
+.solc-cache/

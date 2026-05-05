@@ -1,311 +1,80 @@
 """
 Consumer agent FastAPI service — port 8001.
-Owns the consumer EOA. The LLM tool-calling loop runs here;
-all chain interactions are executed by Python, not the LLM.
+
+The workflow is driven by a LangGraph state machine (consumer/graph.py).
+Cross-agent calls (browse_catalog / request_quote / present_credential) are
+A2A under the hood, hidden by the MCP layer inside each graph node.
 """
+import json
 import os
-import time
 import traceback
 
 import httpx
-import ollama
 import uvicorn
-from eth_account import Account
-from eth_account.messages import encode_defunct
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
+from fastmcp import Client as MCPClient
+from google.protobuf.json_format import MessageToDict
 from pydantic import BaseModel, Field
 from web3 import Web3
 
+from consumer.agent_card import build_consumer_agent_card
+from consumer.graph import build_graph
+from consumer.mcp_server import mcp as consumer_mcp
 from shared.contracts import get_escrow_contract, get_nft_contract
 
-# ── Ethereum setup ─────────────────────────────────────────────────────────────
-RPC_URL = os.environ.get("RPC_URL", "http://localhost:8545")
-CONSUMER_PRIVATE_KEY = os.environ["CONSUMER_PRIVATE_KEY"]
+_RPC_URL = os.environ.get("RPC_URL", "http://localhost:8545")
+_w3 = Web3(Web3.HTTPProvider(_RPC_URL))
 
-w3 = Web3(Web3.HTTPProvider(RPC_URL))
-consumer_account = Account.from_key(CONSUMER_PRIVATE_KEY)
-CONSUMER_ADDRESS = consumer_account.address
+DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+PROVIDER_A2A_URLS = [u.strip() for u in
+                     os.environ.get("PROVIDER_A2A_URLS",
+                                    os.environ.get("PROVIDER_BASE_URL",
+                                                   "http://localhost:8002")).split(",")
+                     if u.strip()]
 
-PROVIDER_BASE_URL = os.environ.get("PROVIDER_BASE_URL", "http://localhost:8002")
-GATEWAY_BASE_URL = os.environ.get("GATEWAY_BASE_URL", "http://localhost:8003")
-DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
+_consumer_agent_card = build_consumer_agent_card()
+_AGENT_CARD_JSON = MessageToDict(_consumer_agent_card, preserving_proto_field_name=True)
 
 inter_agent_log: list[dict] = []
-_logged_interactions: set[tuple[str, str]] = set()
+_logged: set[tuple[str, str]] = set()
 
 
-def _append_interaction(sender: str, message: str) -> None:
+def _append(sender: str, message: str) -> None:
     key = (sender, message)
-    if key in _logged_interactions:
+    if key in _logged:
         return
-    _logged_interactions.add(key)
+    _logged.add(key)
     inter_agent_log.append({"from": sender, "message": message})
 
 
-def _extract_thinking(content: str) -> tuple[str, list[str]]:
-    thoughts: list[str] = []
-    visible_parts: list[str] = []
-    remainder = content
-
-    while "<think>" in remainder and "</think>" in remainder:
-        before, rest = remainder.split("<think>", 1)
-        thought, remainder = rest.split("</think>", 1)
-        if before.strip():
-            visible_parts.append(before.strip())
-        if thought.strip():
-            thoughts.append(thought.strip())
-
-    # Handle truncated thinking: content before a bare </think> with no opening tag
-    if "</think>" in remainder:
-        thought, remainder = remainder.split("</think>", 1)
-        if thought.strip():
-            thoughts.append(thought.strip())
-
-    if remainder.strip():
-        visible_parts.append(remainder.strip())
-
-    return "\n\n".join(visible_parts), thoughts
+_compiled_graph = build_graph()
 
 
-def _send_tx(func, value: int = 0) -> str:
-    tx = func.build_transaction({
-        "from": CONSUMER_ADDRESS,
-        "nonce": w3.eth.get_transaction_count(CONSUMER_ADDRESS, "pending"),
-        "value": value,
-    })
-    signed = w3.eth.account.sign_transaction(tx, CONSUMER_PRIVATE_KEY)
-    raw_tx = getattr(signed, "raw_transaction", None) or signed.rawTransaction
-    tx_hash = w3.eth.send_raw_transaction(raw_tx)
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
-    if receipt["status"] != 1:
-        raise RuntimeError(f"Transaction reverted: {tx_hash.hex()}")
-    return tx_hash.hex()
-
-
-def _get_provider_address() -> str:
-    with httpx.Client() as client:
-        resp = client.get(f"{PROVIDER_BASE_URL}/address")
-        resp.raise_for_status()
-    return resp.json()["address"]
-
-
-# ── LLM tools ─────────────────────────────────────────────────────────────────
-
-def query_provider_catalog() -> str:
-    """Return available bandwidth packages from the provider as a formatted string."""
-    _append_interaction("consumer", "GET /catalog")
-    with httpx.Client() as client:
-        resp = client.get(f"{PROVIDER_BASE_URL}/catalog")
-        resp.raise_for_status()
-    catalog = resp.json()
-    lines = [
-        f"{p['packageId']}: {p['mbps']} Mbps / {p['durationSeconds']}s / "
-        f"{float(Web3.from_wei(p['priceWei'], 'ether'))} ETH "
-        f"({p['availableSlots']} slots available)"
-        for p in catalog
-    ]
-    result = "\n".join(lines)
-    _append_interaction("provider", result)
-    return result
-
-
-def request_agreement_on_chain(package_id: str) -> str:
-    """
-    Get a quote from the provider for the given package, then call
-    escrow.requestAgreement() on-chain locking ETH equal to the quoted price.
-
-    Args:
-        package_id: One of 'small', 'medium', 'large'.
-
-    Returns:
-        String with agreementId and tx hash, or an error message.
-    """
-    _append_interaction("consumer", f"POST /quote package_id={package_id}")
-    try:
-        provider_address = _get_provider_address()
-        with httpx.Client() as client:
-            resp = client.post(
-                f"{PROVIDER_BASE_URL}/quote",
-                json={"packageId": package_id, "consumerAddress": CONSUMER_ADDRESS},
-            )
-            resp.raise_for_status()
-        quote = resp.json()
-    except Exception as e:
-        return f"ERROR getting quote: {e}"
-
-    agreement_id = quote["agreementId"]
-    price_wei = quote["priceWei"]
-    mbps = quote["bandwidthMbps"]
-    dur = quote["durationSeconds"]
-
-    _append_interaction(
-        "provider",
-        f"Quote received: agreementId={agreement_id}, price={float(Web3.from_wei(price_wei, 'ether'))} ETH",
-    )
-
-    escrow = get_escrow_contract(w3)
-    try:
-        tx_hash = _send_tx(
-            escrow.functions.requestAgreement(agreement_id, provider_address, mbps, dur),
-            value=price_wei,
-        )
-    except Exception as e:
-        return f"ERROR calling requestAgreement on-chain: {e}"
-
-    _append_interaction("consumer", f"requestAgreement() sent. tx={tx_hash}, agreementId={agreement_id}")
-    return (
-        f"Agreement requested on-chain. agreementId={agreement_id}, tx={tx_hash}. "
-        "Provider will mint NFT and complete deposit. Use check_agreement_status to confirm."
-    )
-
-
-def check_agreement_status(agreement_id: str) -> str:
-    """
-    Check the on-chain status of an agreement. If ACTIVE, call the gateway to confirm service.
-
-    Args:
-        agreement_id: The agreementId returned by request_agreement_on_chain (as a string to preserve uint256 precision).
-
-    Returns:
-        Status string. If ACTIVE, includes bandwidth and seconds remaining.
-    """
-    try:
-        aid = int(agreement_id)
-    except (ValueError, TypeError):
-        return f"ERROR: agreement_id must be a number, got: {agreement_id!r}"
-    escrow = get_escrow_contract(w3)
-    try:
-        agreement = escrow.functions.getAgreement(aid).call()
-    except Exception as e:
-        return f"ERROR reading agreement {agreement_id}: {e}"
-
-    status_code = agreement[7]
-    status = STATUS_NAMES.get(status_code, "UNKNOWN")
-
-    if status != "ACTIVE":
-        return f"Agreement {agreement_id} is {status}. Not yet settled — try again in a few seconds."
-
-    token_id = agreement[6]
-    _append_interaction("consumer", f"Agreement ACTIVE. tokenId={token_id}. Calling gateway...")
-
-    nonce = str(int(time.time()))
-    message = encode_defunct(text=nonce)
-    signed = w3.eth.account.sign_message(message, private_key=CONSUMER_PRIVATE_KEY)
-    sig = signed.signature.hex()
-
-    try:
-        with httpx.Client() as client:
-            resp = client.get(
-                f"{GATEWAY_BASE_URL}/service",
-                params={"tokenId": token_id},
-                headers={"X-Nonce": nonce, "X-Signature": sig},
-            )
-            resp.raise_for_status()
-        data = resp.json()
-        _append_interaction("provider", f"Gateway response: {data}")
-        return (
-            f"Service ACTIVE. tokenId={token_id}, "
-            f"{data['bandwidth_mbps']} Mbps, "
-            f"{data['seconds_remaining']}s remaining, "
-            f"endpoint={data['endpoint']}."
-        )
-    except Exception as e:
-        return f"Agreement ACTIVE (tokenId={token_id}) but gateway check failed: {e}"
-
-
-STATUS_NAMES = {0: "NONE", 1: "REQUESTED", 2: "ACTIVE", 3: "CLOSED", 4: "CANCELLED"}
-
-# ── LLM loop ───────────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """You are a bandwidth procurement agent for a blockchain-based network service.
-Your goal is to get the user an ACTIVE service token — complete the full purchase workflow whenever you can determine the right tier.
-
-Tools available:
-1. query_provider_catalog — fetch available packages and prices
-2. request_agreement_on_chain — get a quote and lock ETH on-chain
-3. check_agreement_status — verify settlement and get the active token
-
-Workflow — run every step when you can determine the tier:
-1. Call query_provider_catalog to fetch the catalog (skip only if the user names an exact tier: small, medium, or large).
-2. Pick the package whose bandwidth best matches the request. Use the smallest tier that satisfies the requirement.
-3. Call request_agreement_on_chain with the chosen package_id.
-4. Call check_agreement_status immediately after. If REQUESTED (not yet settled), retry up to 5 times before giving up.
-5. Reply with a summary: what was purchased, agreementId, tokenId, and bandwidth granted.
-
-Clarification — ask ONE short question only when intent is genuinely ambiguous:
-- Ambiguous: "give me something", "a package please", no bandwidth or tier specified at all.
-- NOT ambiguous: any Mbps value, tier name (small/medium/large), "fastest", "cheapest", "at least X Mbps".
-- If ambiguous, ask exactly: "Which tier? small (50 Mbps / 0.01 ETH), medium (100 Mbps / 0.02 ETH), or large (500 Mbps / 0.08 ETH)?"
-- When the user's next message names a tier or bandwidth, immediately run the full workflow — do not ask again.
-
-Rules:
-- Default to proceeding autonomously. Only ask when you genuinely cannot determine the tier.
-- CRITICAL: Only report the EXACT agreementId and tokenId returned by the tools. NEVER guess or use example numbers."""
-
-TOOL_MAP = {
-    "query_provider_catalog": query_provider_catalog,
-    "request_agreement_on_chain": request_agreement_on_chain,
-    "check_agreement_status": check_agreement_status,
-}
-
-
-def run_consumer(user_message: str, model: str = DEFAULT_MODEL) -> tuple[str, list[dict], list[str]]:
+async def run_consumer(user_message: str, model: str = DEFAULT_MODEL) -> tuple[str, list[dict], list[str]]:
     inter_agent_log.clear()
-    _logged_interactions.clear()
-    thinking: list[str] = []
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_message},
-    ]
-    tools = [query_provider_catalog, request_agreement_on_chain, check_agreement_status]
+    _logged.clear()
 
-    for _ in range(12):
-        try:
-            response = ollama.chat(model=model, messages=messages, tools=tools, think=False)
-        except Exception as e:
-            error_msg = f"Ollama Error: {e}"
-            if "not found" in str(e).lower():
-                error_msg += f"\n\nMake sure to pull the model first: `ollama pull {model}`"
-            return error_msg, list(inter_agent_log), thinking
+    initial: dict = {
+        "user_message": user_message,
+        "provider_url": PROVIDER_A2A_URLS[0],
+        "provider_urls": list(PROVIDER_A2A_URLS),
+        "model": model,
+        "log": [],
+        "thinking": [],
+    }
+    final = await _compiled_graph.ainvoke(initial)
 
-        msg = response.message
-        visible_content, thought_chunks = _extract_thinking(msg.content or "")
-        thinking.extend(thought_chunks)
-        if msg.thinking:
-            thinking.append(msg.thinking.strip())
+    # Mirror the graph's log into the module-level list the dashboard polls.
+    for entry in final.get("log", []):
+        _append(entry["from"], entry["message"])
 
-        if not msg.tool_calls:
-            break
-
-        messages.append({
-            "role": "assistant",
-            "content": visible_content,
-            "tool_calls": msg.tool_calls,
-        })
-
-        for tc in msg.tool_calls:
-            tool_name = tc.function.name
-            args = tc.function.arguments or {}
-            fn = TOOL_MAP.get(tool_name)
-            if fn is None:
-                result = f"ERROR: unknown tool '{tool_name}'"
-            else:
-                try:
-                    result = fn(**args)
-                except Exception as e:
-                    result = f"ERROR in {tool_name}: {e}"
-            messages.append({"role": "tool", "tool_name": tool_name, "content": str(result)})
-    else:
-        return (
-            "The agreement was submitted on-chain but the provider has not settled it yet after several retries. "
-            "The NFT will be delivered automatically once the provider processes the event — check back shortly.",
-            list(inter_agent_log),
-            thinking,
-        )
-
-    return visible_content, list(inter_agent_log), thinking
+    return (
+        final.get("final_response", "(no response)"),
+        list(inter_agent_log),
+        final.get("thinking", []),
+    )
 
 
-# ── FastAPI app ────────────────────────────────────────────────────────────────
 app = FastAPI(title="Consumer Agent")
 
 
@@ -320,18 +89,24 @@ class ChatResponse(BaseModel):
     thinking: list[str] = Field(default_factory=list)
 
 
+@app.get("/.well-known/agent-card.json")
+def agent_card_canonical() -> dict:
+    return _AGENT_CARD_JSON
+
+
+@app.get("/.well-known/agent.json")
+def agent_card_legacy() -> dict:
+    return _AGENT_CARD_JSON
+
+
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest) -> ChatResponse:
+async def chat(req: ChatRequest) -> ChatResponse:
     try:
-        response_text, log, thinking = run_consumer(req.message, model=req.model)
+        response_text, log, thinking = await run_consumer(req.message, model=req.model)
         return ChatResponse(response=response_text, log=log, thinking=thinking)
     except Exception as e:
         traceback.print_exc()
-        return ChatResponse(
-            response=f"INTERNAL ERROR: {e}",
-            log=[],
-            thinking=[]
-        )
+        return ChatResponse(response=f"INTERNAL ERROR: {e}", log=[], thinking=[])
 
 
 @app.get("/log")
@@ -346,34 +121,137 @@ def clear_log() -> dict:
 
 
 @app.get("/catalog_proxy")
-def catalog_proxy() -> list[dict]:
-    with httpx.Client() as client:
-        resp = client.get(f"{PROVIDER_BASE_URL}/catalog")
-        resp.raise_for_status()
-    return resp.json()
+async def catalog_proxy() -> list[dict]:
+    async with MCPClient(consumer_mcp) as c:
+        result = await c.call_tool("browse_catalog",
+                                   {"provider_url": PROVIDER_A2A_URLS[0]})
+        text = result.content[0].text if result.content else ""
+    if text.startswith("ERROR"):
+        raise HTTPException(502, text)
+    return json.loads(text)
 
 
 @app.get("/address")
-def consumer_address() -> dict:
-    return {"address": CONSUMER_ADDRESS}
+async def consumer_address_endpoint() -> dict:
+    async with MCPClient(consumer_mcp) as c:
+        result = await c.call_tool("wallet_address", {})
+    return {"address": result.content[0].text}
 
 
 @app.get("/check_token")
-def check_token(token_id: int = Query(..., alias="tokenId")) -> dict:
-    """Manual token check from UI — signs nonce and calls gateway."""
-    nonce = str(int(time.time()))
-    message = encode_defunct(text=nonce)
-    signed = w3.eth.account.sign_message(message, private_key=CONSUMER_PRIVATE_KEY)
-    sig = signed.signature.hex()
-    with httpx.Client() as client:
-        resp = client.get(
-            f"{GATEWAY_BASE_URL}/service",
-            params={"tokenId": token_id},
-            headers={"X-Nonce": nonce, "X-Signature": sig},
-        )
-    if resp.status_code != 200:
-        raise HTTPException(resp.status_code, resp.json().get("detail", resp.text))
-    return resp.json()
+async def check_token(tokenId: int) -> dict:
+    """UI-facing wrapper around the verify_credential MCP tool.
+
+    Reshapes {ok, owner, mbps, secondsRemaining, endpoint, ...} into the
+    {owner, status, seconds_remaining, bandwidth_mbps, endpoint} the NFT strip
+    expects. Status is derived from secondsRemaining since the consumer can't
+    observe SDN state directly.
+    """
+    async with MCPClient(consumer_mcp) as c:
+        result = await c.call_tool("verify_credential", {"token_id": int(tokenId)})
+        text = result.content[0].text if result.content else ""
+    if text.startswith("ERROR"):
+        raise HTTPException(404, text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise HTTPException(502, f"unparseable verify_credential response: {e}")
+    seconds_remaining = int(data.get("secondsRemaining", 0))
+    return {
+        "owner": data["owner"],
+        "status": "active" if seconds_remaining > 0 else "expired",
+        "seconds_remaining": seconds_remaining,
+        "bandwidth_mbps": float(data["mbps"]),
+        "endpoint": data["endpoint"],
+        "agreementId": str(data.get("agreementId", "")),
+    }
+
+
+class ProbeProxyRequest(BaseModel):
+    tokenId: int
+
+
+@app.post("/probe_proxy")
+async def probe_proxy(req: ProbeProxyRequest) -> dict:
+    """Forward an iperf3 probe to the provider that allocated the slot.
+
+    Picks the first provider from PROVIDER_A2A_URLS — fine for the single-
+    provider demo. The provider's /probe looks up the slot bound to the
+    NFT's agreementId and runs verify_bandwidth (mocked under SDN_MOCK=true).
+    """
+    if not PROVIDER_A2A_URLS:
+        raise HTTPException(500, "no PROVIDER_A2A_URLS configured")
+    target = f"{PROVIDER_A2A_URLS[0]}/probe"
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            r = await http.post(target, json={"tokenId": int(req.tokenId)})
+            r.raise_for_status()
+            return r.json()
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(e.response.status_code,
+                            f"provider /probe failed: {e.response.text}")
+    except Exception as e:
+        raise HTTPException(502, f"probe forward failed: {e}")
+
+
+@app.get("/chain_events")
+def chain_events(since_block: int = 0) -> list[dict]:
+    """Return escrow + NFT events emitted since `since_block`.
+
+    Used by the dashboard to populate the on-chain panel. Each event:
+      {event, args, block, txHash, gas}
+    where args is a JSON-safe dict of the event's indexed/non-indexed args.
+    """
+    escrow = get_escrow_contract(_w3)
+    nft = get_nft_contract(_w3)
+    to_block = _w3.eth.block_number
+
+    def _serialize(args) -> dict:
+        out = {}
+        for k, v in dict(args).items():
+            if isinstance(v, (bytes, bytearray)):
+                out[k] = "0x" + v.hex()
+            elif hasattr(v, "hex") and not isinstance(v, (int, str)):
+                out[k] = v.hex()
+            else:
+                out[k] = str(v) if not isinstance(v, (int, str, bool, type(None))) else v
+        return out
+
+    def _gather(get_logs_fn, name: str) -> list[dict]:
+        try:
+            logs = get_logs_fn(fromBlock=since_block, toBlock=to_block)
+        except Exception:
+            return []
+        out = []
+        for evt in logs:
+            tx_hash = evt["transactionHash"].hex() if hasattr(evt["transactionHash"], "hex") else str(evt["transactionHash"])
+            try:
+                gas = int(_w3.eth.get_transaction_receipt(tx_hash)["gasUsed"])
+            except Exception:
+                gas = 0
+            out.append({
+                "event": name,
+                "args": _serialize(evt["args"]),
+                "block": int(evt["blockNumber"]),
+                "txHash": tx_hash,
+                "gas": gas,
+            })
+        return out
+
+    def _gather_named(contract, event_name: str):
+        # Be defensive: if the deployed ABI doesn't have the event,
+        # skip it rather than 500 the whole endpoint.
+        evt = getattr(contract.events, event_name, None)
+        if evt is None:
+            return []
+        return _gather(evt.get_logs, event_name)
+
+    events: list[dict] = []
+    for name in ("AgreementRequested", "AgreementActive", "AgreementCancelled"):
+        events += _gather_named(escrow, name)
+    events += _gather_named(nft, "Transfer")
+    events.sort(key=lambda e: e["block"])
+    return events
 
 
 if __name__ == "__main__":

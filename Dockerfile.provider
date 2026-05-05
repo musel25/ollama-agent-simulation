@@ -12,7 +12,7 @@ ENV UV_LINK_MODE=copy \
 COPY --from=uv /uv /uvx /bin/
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends build-essential \
+ && apt-get install -y --no-install-recommends build-essential git \
  && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml uv.lock ./
@@ -26,13 +26,15 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 COPY --from=builder /app/.venv /app/.venv
 
+# docker CLI for the SDN tools (allocate_bandwidth docker-execs into CE containers)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends docker.io iproute2 iputils-ping \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY provider/ ./provider/
 COPY shared/ ./shared/
 
 # deployments volume mounted at runtime — directory must exist
 RUN mkdir -p contracts/deployments
 
-CMD ["sh", "-c", \
-  "uvicorn provider.app:app --host 0.0.0.0 --port 8002 & \
-   uvicorn provider.gateway:app --host 0.0.0.0 --port 8003 & \
-   wait"]
+CMD ["uvicorn", "provider.app:app", "--host", "0.0.0.0", "--port", "8002"]

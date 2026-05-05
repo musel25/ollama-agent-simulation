@@ -42,7 +42,7 @@ services:
       timeout: 10s
       retries: 30
 
-  ollama-pull-4b:
+  ollama-pull:
     image: ollama/ollama:latest
     depends_on:
       ollama:
@@ -51,19 +51,7 @@ services:
       - OLLAMA_HOST=http://ollama:11434
     volumes:
       - ollama:/root/.ollama
-    entrypoint: ["ollama", "pull", "qwen3:4b"]
-    restart: "no"
-
-  ollama-pull-1.7b:
-    image: ollama/ollama:latest
-    depends_on:
-      ollama:
-        condition: service_healthy
-    environment:
-      - OLLAMA_HOST=http://ollama:11434
-    volumes:
-      - ollama:/root/.ollama
-    entrypoint: ["ollama", "pull", "qwen3:1.7b"]
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-llama3.2:3b}"]
     restart: "no"
 
   provider-agent:
@@ -75,13 +63,16 @@ services:
         condition: service_completed_successfully
     ports:
       - "8002:8002"
-      - "8003:8003"
     environment:
       - RPC_URL=http://anvil:8545
       - PROVIDER_PRIVATE_KEY=${PROVIDER_PRIVATE_KEY}
+      - PROVIDER_BASE_URL=http://provider-agent:8002
+      - SDN_MOCK=${SDN_MOCK:-true}
     volumes:
       - ./contracts/deployments:/app/contracts/deployments:ro
-      - ./provider/inventory.txt:/app/provider/inventory.txt
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   consumer-agent:
     build:
@@ -90,23 +81,44 @@ services:
     depends_on:
       provider-agent:
         condition: service_started
-      ollama-pull-4b:
-        condition: service_completed_successfully
-      ollama-pull-1.7b:
+      ollama-pull:
         condition: service_completed_successfully
     ports:
       - "8001:8001"
     environment:
       - RPC_URL=http://anvil:8545
       - CONSUMER_PRIVATE_KEY=${CONSUMER_PRIVATE_KEY}
-      - PROVIDER_BASE_URL=http://provider-agent:8002
-      - GATEWAY_BASE_URL=http://provider-agent:8003
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:4b}
+      - PROVIDER_A2A_URLS=http://provider-agent:8002
+      - PROVIDER_AGENT_CARD_URL=http://provider-agent:8002/.well-known/agent-card.json
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:3b}
       - OLLAMA_HOST=http://ollama:11434
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./contracts/deployments:/app/contracts/deployments:ro
+
+  consumer-agent-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.consumer
+    depends_on:
+      provider-agent:
+        condition: service_started
+      ollama-pull:
+        condition: service_completed_successfully
+    ports:
+      - "8011:8001"
+    environment:
+      - RPC_URL=http://anvil:8545
+      - CONSUMER_PRIVATE_KEY=${CONSUMER_PRIVATE_KEY_2}
+      - PROVIDER_A2A_URLS=http://provider-agent:8002
+      - PROVIDER_AGENT_CARD_URL=http://provider-agent:8002/.well-known/agent-card.json
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:3b}
+      - OLLAMA_HOST=http://ollama:11434
+    volumes:
+      - ./contracts/deployments:/app/contracts/deployments:ro
+    profiles:
+      - multi-consumer
 
   consumer-ui:
     build:
@@ -119,7 +131,7 @@ services:
       - "8501:8501"
     environment:
       - CONSUMER_BASE_URL=http://consumer-agent:8001
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:4b}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:3b}
     entrypoint: ["streamlit", "run", "consumer/ui.py",
                  "--server.port", "8501", "--server.address", "0.0.0.0"]
 
