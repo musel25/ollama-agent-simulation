@@ -15,10 +15,14 @@ Mounted at /mcp inside provider/app.py.
 """
 from __future__ import annotations
 
+import asyncio
 import dataclasses as _dc
+import inspect
 import json
 import os
 import time
+from collections import deque
+from functools import wraps
 
 from eth_account import Account
 from eth_account.messages import encode_defunct
@@ -27,6 +31,63 @@ from web3 import Web3
 
 from provider.catalog import get_catalog_with_availability, make_quote
 from shared.contracts import get_escrow_contract, get_nft_contract
+
+tool_call_log: deque = deque(maxlen=500)
+
+
+def _summarize_args(kwargs: dict) -> dict:
+    """Truncate values so log entries stay small."""
+    out = {}
+    for k, v in kwargs.items():
+        s = str(v)
+        out[k] = s if len(s) <= 80 else s[:77] + "..."
+    return out
+
+
+def _logged(fn):
+    """Wrap an MCP tool so each invocation appends one entry to tool_call_log.
+
+    Records {tool, ts, args_summary, status} on entry as 'running' and
+    flips status to 'ok' or 'error' once the underlying function returns.
+    """
+    tool_name = fn.__name__
+
+    if inspect.iscoroutinefunction(fn):
+        @wraps(fn)
+        async def async_wrapper(*args, **kwargs):
+            entry = {
+                "tool": tool_name,
+                "ts": time.time(),
+                "args": _summarize_args(kwargs),
+                "status": "running",
+            }
+            tool_call_log.append(entry)
+            try:
+                result = await fn(*args, **kwargs)
+                entry["status"] = "ok"
+                return result
+            except Exception:
+                entry["status"] = "error"
+                raise
+        return async_wrapper
+
+    @wraps(fn)
+    def sync_wrapper(*args, **kwargs):
+        entry = {
+            "tool": tool_name,
+            "ts": time.time(),
+            "args": _summarize_args(kwargs),
+            "status": "running",
+        }
+        tool_call_log.append(entry)
+        try:
+            result = fn(*args, **kwargs)
+            entry["status"] = "ok"
+            return result
+        except Exception:
+            entry["status"] = "error"
+            raise
+    return sync_wrapper
 
 NONCE_WINDOW = 300
 
@@ -86,12 +147,14 @@ def _extract_token_id(receipt) -> int:
 
 
 @mcp.tool()
+@_logged
 def get_catalog() -> str:
     """Return available bandwidth packages with pricing and slot availability."""
     return json.dumps(get_catalog_with_availability())
 
 
 @mcp.tool()
+@_logged
 def request_quote(package_id: str, consumer_address: str) -> str:
     """Request a price quote for a bandwidth package. Returns an agreementId-bound quote or error."""
     quote = make_quote(package_id, consumer_address)
@@ -101,6 +164,7 @@ def request_quote(package_id: str, consumer_address: str) -> str:
 
 
 @mcp.tool()
+@_logged
 def verify_credential_ownership(token_id: int, signature: str, nonce: str) -> str:
     """
     Verify ownership of a bandwidth credential NFT.
@@ -154,6 +218,7 @@ def verify_credential_ownership(token_id: int, signature: str, nonce: str) -> st
 
 
 @mcp.tool()
+@_logged
 def mint_credential(
     agreement_id: int,
     consumer_address: str,
@@ -190,6 +255,7 @@ def mint_credential(
 
 
 @mcp.tool()
+@_logged
 def complete_swap(agreement_id: int, token_id: int) -> str:
     """
     Approve the escrow on the freshly minted NFT, then call escrow.deposit
@@ -211,6 +277,7 @@ def complete_swap(agreement_id: int, token_id: int) -> str:
 
 
 @mcp.tool()
+@_logged
 def allocate_bandwidth(customer_id: str, pe: str, subinterface: str, mbps: float) -> str:
     """
     Push gNMI policer to PE and apply tc tbf on connected CE.
@@ -231,6 +298,7 @@ def allocate_bandwidth(customer_id: str, pe: str, subinterface: str, mbps: float
 
 
 @mcp.tool()
+@_logged
 def revoke_bandwidth(customer_id: str, pe: str, subinterface: str) -> str:
     """Reverse of allocate_bandwidth."""
     if SDN_MOCK or not _SRL_AVAILABLE:
@@ -244,6 +312,7 @@ def revoke_bandwidth(customer_id: str, pe: str, subinterface: str) -> str:
 
 
 @mcp.tool()
+@_logged
 def verify_bandwidth(src_ce: str, dst_ce: str,
                      expected_mbps: float | None = None,
                      tolerance: float = 0.2) -> str:

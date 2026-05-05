@@ -182,3 +182,19 @@ async def test_complete_swap_calls_approve_then_deposit():
             assert "depositTx" in data
             fake_nft.functions.approve.assert_called_once_with("0xESCROW", 42)
             fake_escrow.functions.deposit.assert_called_once_with(12345, 42)
+
+
+@pytest.mark.asyncio
+async def test_tool_call_log_records_invocations():
+    from provider import mcp_server
+    mcp_server.tool_call_log.clear()
+
+    from provider.mcp_server import mcp
+    async with Client(mcp) as client:
+        await client.call_tool("get_catalog", {})
+
+    entries = list(mcp_server.tool_call_log)
+    assert len(entries) == 1
+    assert entries[0]["tool"] == "get_catalog"
+    assert entries[0]["status"] == "ok"
+    assert "ts" in entries[0]
