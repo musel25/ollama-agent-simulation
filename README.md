@@ -38,6 +38,16 @@ If `make demo` reports an active service with a `tokenId`, the whole stack works
 
 To stop everything: `make down` (or `make down-clean` to wipe state too).
 
+### Real SDN demo (optional)
+
+The default demo uses a mocked SDN layer (`SDN_MOCK=true`). To exercise real bandwidth enforcement (gNMI policer push to Nokia SR Linux + `tc tbf` on the connected CE), you need the [`srl-gnmi-bandwidth-poc`](https://github.com/musel25/srl-gnmi-bandwidth-poc) sibling repo cloned next to this one:
+
+```bash
+make clab-up      # stand up the ContainerLab topology
+make demo-real    # restart provider with SDN_MOCK=false, run demo, verify with iperf3
+make clab-down    # tear down the topology
+```
+
 ---
 
 ## Where to read next
@@ -60,9 +70,10 @@ If you've never seen this project before: read those docs in the order listed.
 .
 ├── consumer/         # Buyer agent: FastAPI + Ollama + MCP client + A2A client
 ├── provider/         # Seller agent: FastAPI + MCP server + A2A executor + SDN tools
-├── shared/           # Cross-agent code: A2A message types, ABIs, slot pool
+├── shared/           # Cross-agent code: Config, A2A messages, ABIs, slot pool, anvil/deploy helpers
 ├── contracts/        # Solidity contracts (BandwidthEscrow + BandwidthNFT) + Foundry scripts
-├── tests/            # Pytest suite covering all of the above
+├── notebooks/        # Per-stage explainers + end-to-end demo, all in-process
+├── tests/            # Pytest suite (unit + integration)
 ├── docs/             # This documentation set
 └── paper/            # Companion research paper (separate git repo)
 ```
