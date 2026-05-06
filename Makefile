@@ -1,9 +1,12 @@
-.PHONY: up down demo contracts logs clab-up clab-down demo-real
+.PHONY: up up-real down demo contracts logs clab-up clab-down demo-real
 
 up:
 	@mkdir -p contracts/deployments
 	docker compose up --build -d
 	@echo "Services starting... UI at http://localhost:8501"
+
+up-real:
+	@SDN_MOCK=false $(MAKE) up
 
 down:
 	docker compose down
@@ -35,9 +38,13 @@ demo: _check_services
 	@curl -sf http://localhost:8002/inventory | python3 -m json.tool
 
 _check_services:
-	@curl -sf http://localhost:8001/address > /dev/null || (echo "ERROR: consumer agent not running on :8001" && exit 1)
-	@curl -sf http://localhost:8002/address > /dev/null || (echo "ERROR: provider agent not running on :8002" && exit 1)
-	@echo "Services OK"
+	@for i in $$(seq 1 30); do \
+	  curl -sf http://localhost:8001/address > /dev/null 2>&1 && \
+	  curl -sf http://localhost:8002/address > /dev/null 2>&1 && \
+	  echo "Services OK" && exit 0; \
+	  sleep 1; \
+	done; \
+	echo "ERROR: agents not ready on :8001/:8002 after 30s"; exit 1
 
 CLAB_REPO ?= ../srl-gnmi-bandwidth-poc
 
