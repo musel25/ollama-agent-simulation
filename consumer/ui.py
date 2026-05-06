@@ -280,10 +280,15 @@ def render_wire_panel() -> None:
                 f'opacity:0.7;margin-bottom:2px;">{header}</div>{text}</div>'
             )
         else:
+            is_err = '"error"' in item.get("text", "")
+            if is_err:
+                bg, border, accent, color = "#1f0f0f", "#5a1f1f", "#f87171", "#fecaca"
+            else:
+                bg, border, accent, color = "#0f1f1a", "#1f3a30", "#34d399", "#a7e8c4"
             bubbles_html.append(
-                f'<div style="align-self:flex-end;background:#0f1f1a;'
-                f'border:1px solid #1f3a30;border-right:3px solid #34d399;'
-                f'border-radius:8px;padding:6px 9px;font-size:10px;color:#a7e8c4;'
+                f'<div style="align-self:flex-end;background:{bg};'
+                f'border:1px solid {border};border-right:3px solid {accent};'
+                f'border-radius:8px;padding:6px 9px;font-size:10px;color:{color};'
                 f'max-width:88%;font-family:ui-monospace,monospace;line-height:1.4;'
                 f'text-align:right;word-break:break-word;">'
                 f'<div style="font-size:8px;letter-spacing:0.4px;text-transform:uppercase;'
@@ -505,6 +510,51 @@ def _active_token_id() -> int | None:
     return None
 
 
+def _latest_activation_status() -> dict | None:
+    """
+    Most recent provider activation result from the wire timeline.
+    Returns {"tc": bool|None, "gnmi": bool|None, "error": str|None} or None.
+    """
+    import json as _json
+    for item in reversed(st.session_state.timeline):
+        if item.get("kind") != "bubble" or item.get("sender") != "provider":
+            continue
+        text = item.get("text", "").strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            data = _json.loads(text)
+        except Exception:
+            continue
+        if "error" in data:
+            return {"tc": None, "gnmi": None, "error": str(data["error"])}
+        alloc = data.get("allocation")
+        if isinstance(alloc, dict) and ("tc_applied" in alloc or "gnmi_pushed" in alloc):
+            return {
+                "tc": bool(alloc.get("tc_applied")),
+                "gnmi": bool(alloc.get("gnmi_pushed")),
+                "error": None,
+            }
+    return None
+
+
+def _pill(label: str, state: str) -> str:
+    """state: 'ok' (green), 'fail' (red), 'mock' (grey)."""
+    palette = {
+        "ok":   ("#0f1f1a", "#22c55e", "#a7e8c4"),
+        "fail": ("#1f0f0f", "#f87171", "#fecaca"),
+        "mock": ("#15151f", "#444",    "#888"),
+    }
+    bg, border, color = palette[state]
+    glyph = {"ok": "✓", "fail": "✗", "mock": "·"}[state]
+    return (
+        f'<span style="display:inline-block;padding:1px 6px;border-radius:3px;'
+        f'background:{bg};border:1px solid {border};color:{color};'
+        f'font-family:ui-monospace,monospace;font-size:9px;margin-right:4px;">'
+        f'{label} {glyph}</span>'
+    )
+
+
 def render_nft_strip() -> None:
     tid = _active_token_id()
     if tid is None:
@@ -529,7 +579,37 @@ def render_nft_strip() -> None:
         return
 
     owner_short = data["owner"][:6] + "…" + data["owner"][-4:]
-    sdn_rule = f"policer {data['bandwidth_mbps']} Mbps · {data['endpoint'].replace('clab://', '')}"
+    iface_str = data["endpoint"].replace("clab://", "")
+    rule_line = f"{data['bandwidth_mbps']} Mbps · {iface_str}"
+
+    status = _latest_activation_status()
+    if SDN_MOCK:
+        gnmi_state = tc_state = "mock"
+        sdn_error = None
+    elif status is None:
+        gnmi_state = tc_state = "mock"
+        sdn_error = None
+    elif status["error"]:
+        gnmi_state = tc_state = "fail"
+        sdn_error = status["error"]
+    else:
+        gnmi_state = "ok" if status["gnmi"] else "fail"
+        tc_state = "ok" if status["tc"] else "fail"
+        sdn_error = None
+
+    sdn_pills = _pill("gNMI", gnmi_state) + _pill("tc", tc_state)
+    sdn_cell = (
+        f'<div style="margin-bottom:3px;">{sdn_pills}</div>'
+        f'<div style="color:#a7e8c4;font-family:ui-monospace,monospace;">'
+        f'{html_lib.escape(rule_line)}</div>'
+    )
+    if sdn_error:
+        sdn_cell += (
+            f'<div style="color:#f87171;font-family:ui-monospace,monospace;'
+            f'font-size:9px;margin-top:3px;word-break:break-word;">'
+            f'{html_lib.escape(sdn_error)}</div>'
+        )
+
     st.markdown(f'''
       <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;
                   padding:10px 14px;background:#0f1410;border:1px solid #22c55e55;
@@ -545,7 +625,7 @@ def render_nft_strip() -> None:
              <div style="color:#a7e8c4;font-family:ui-monospace,monospace;">{html_lib.escape(data["status"])} · {data["seconds_remaining"]}s</div></div>
         <div><div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:0.4px;
                         margin-bottom:3px;">SDN Rule</div>
-             <div style="color:#a7e8c4;font-family:ui-monospace,monospace;">{html_lib.escape(sdn_rule)}</div></div>
+             {sdn_cell}</div>
         <div><div style="font-size:9px;color:#666;text-transform:uppercase;letter-spacing:0.4px;
                         margin-bottom:3px;">QoS</div>
              <div style="color:#a7e8c4;font-family:ui-monospace,monospace;">guaranteed</div></div>
@@ -575,10 +655,18 @@ def render_iperf_expander() -> None:
             }
             st.line_chart(chart_data, height=200)
             last = st.session_state.probe_samples[-1]
-            st.caption(
+            caption = (
                 f"last: {last['src_ce']} → {last['dst_ce']} "
                 f"{last['measured_mbps']:.2f} / {last['expected_mbps']:.1f} Mbps"
             )
+            if last["expected_mbps"] > 0 and last["measured_mbps"] > 1.2 * last["expected_mbps"]:
+                st.markdown(
+                    f'<div style="color:#f59e0b;font-size:11px;">⚠ {caption} '
+                    f'— measured exceeds expected by &gt;20%; policer likely not enforced.</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.caption(caption)
 
 
 STAGES = [
