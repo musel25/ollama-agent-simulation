@@ -276,3 +276,52 @@ def render_event_timeline(events: Iterable[dict]) -> HTML:
         f"<th>gas</th><th>tx</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
     )
+
+
+def _topology_mermaid(rows: list[dict],
+                      active_agreement_ids: set[int],
+                      ce_peer: dict) -> str:
+    """Build a mermaid graph LR from a list of slot-pool rows."""
+    pes: set[str] = set()
+    ces: set[str] = set()
+    edges: list[str] = []
+    active_edges: list[str] = []
+    for row in rows:
+        for s in row.get("slots", []):
+            pe, ce, sif = s["pe"], s["ce"], s["subinterface"]
+            pes.add(pe); ces.add(ce)
+            label = f"{row['mbps']} Mbps<br/>{sif}"
+            edge = f"  {ce} ---|{label}| {pe}"
+            if s.get("agreementId") in active_agreement_ids:
+                active_edges.append(f"  linkStyle {len(edges)} stroke:#1b5e20,stroke-width:3px")
+            edges.append(edge)
+    nodes = "\n".join(
+        [f"  {p}([PE: {p}])" for p in sorted(pes)]
+        + [f"  {c}((CE: {c}))" for c in sorted(ces)]
+    )
+    pairs = "\n".join(
+        f"  {a} -.peer.- {b}" for a, b in sorted(set(
+            tuple(sorted([k, v])) for k, v in ce_peer.items() if k in ces and v in ces
+        ))
+    )
+    return (
+        "graph LR\n"
+        f"{nodes}\n"
+        f"{chr(10).join(edges)}\n"
+        f"{pairs}\n"
+        f"{chr(10).join(active_edges)}"
+    )
+
+
+def render_topology_from_rows(rows: list[dict],
+                              active_agreement_ids: set[int],
+                              ce_peer: dict) -> HTML | Image:
+    """Render the network topology described by raw inventory rows."""
+    return render_mermaid(_topology_mermaid(rows, active_agreement_ids, ce_peer))
+
+
+def render_topology(slot_pool, active_agreement_ids: set[int],
+                    ce_peer: dict) -> HTML | Image:
+    """Render topology by reading rows directly off a SlotPool instance."""
+    rows = slot_pool._read_and_reclaim()  # noqa: SLF001 — public read access
+    return render_topology_from_rows(rows, active_agreement_ids, ce_peer)
