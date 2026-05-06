@@ -105,7 +105,7 @@ When your Python code needs to call another service over the network, you need a
 
 A container is like a lightweight virtual machine. It bundles your code, the Python interpreter, all libraries, and OS-level tools into one image that runs identically on any machine. Docker builds images from `Dockerfile` instructions. Docker Compose lets you declare multiple services (consumer, provider, blockchain node, LLM server) in a single `docker-compose.yml` file and start them all with one command.
 
-**In this project:** `docker-compose.yml` at the repo root defines seven services: `anvil` (blockchain), `deployer` (one-shot contract deployment), `ollama` (LLM server), `ollama-pull` (one-shot model pull), `provider-agent`, `consumer-agent`, and `consumer-ui`. The `deployer` and `ollama-pull` services are one-shot — they exit after their job is done. An eighth service, `consumer-agent-2`, is profile-gated (`profiles: [multi-consumer]`) and does not start with `make up`. `Dockerfile.consumer` and `Dockerfile.provider` define the images. Use `make up` to build and start everything, `make down` to stop.
+**In this project:** `docker-compose.yml` at the repo root defines seven services: `anvil` (blockchain), `deployer` (one-shot contract deployment), `ollama` (LLM server), `ollama-pull` (one-shot model pull), `provider-agent`, `consumer-agent`, and `consumer-ui`. The `deployer` and `ollama-pull` services are one-shot — they exit after their job is done. `Dockerfile.consumer` and `Dockerfile.provider` define the images. Use `make up` to build and start everything, `make down` to stop.
 
 ---
 

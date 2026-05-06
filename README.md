@@ -82,4 +82,4 @@ If you've never seen this project before: read those docs in the order listed.
 
 ## Status
 
-Active prototype on the `feat/mcp-a2a` branch. Companion to a research paper currently in progress (see `paper/`).
+Active prototype. Companion to a research paper currently in progress (see `paper/`).

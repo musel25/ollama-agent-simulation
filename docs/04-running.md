@@ -124,8 +124,6 @@ of them:
 | `PROVIDER_ADDRESS` | Ethereum address derived from `PROVIDER_PRIVATE_KEY` (used in the escrow contract) |
 | `CONSUMER_PRIVATE_KEY` | Signs consumer-side on-chain calls (requestAgreement) |
 | `CONSUMER_ADDRESS` | Ethereum address derived from `CONSUMER_PRIVATE_KEY` |
-| `CONSUMER_PRIVATE_KEY_2` | Second consumer EOA — only needed for multi-consumer mode |
-| `CONSUMER_ADDRESS_2` | Ethereum address derived from `CONSUMER_PRIVATE_KEY_2` |
 
 Each `*_PRIVATE_KEY` has a corresponding `*_ADDRESS` that **must stay in
 sync**. The `.env.example` defaults already pair them correctly for the
@@ -540,8 +538,7 @@ pre-funded. If you replaced any key with a non-Anvil key, that address has
 zero ETH.
 
 **Fix.**
-1. Revert `CONSUMER_PRIVATE_KEY` (and `CONSUMER_PRIVATE_KEY_2`) in `.env` to
-   the `.env.example` defaults.
+1. Revert `CONSUMER_PRIVATE_KEY` in `.env` to the `.env.example` default.
 2. Alternatively, fund your custom address via the Anvil console:
    ```bash
    cast send <your-address> --value 10ether \
