@@ -325,3 +325,29 @@ def render_topology(slot_pool, active_agreement_ids: set[int],
     """Render topology by reading rows directly off a SlotPool instance."""
     rows = slot_pool._read_and_reclaim()  # noqa: SLF001 — public read access
     return render_topology_from_rows(rows, active_agreement_ids, ce_peer)
+
+
+def toggle_before_after(before, after):
+    """Return an ipywidgets.VBox toggle, or stack both in HTML if widgets missing."""
+    try:
+        import ipywidgets as widgets
+    except Exception:
+        # Fallback: just stack
+        return HTML(
+            "<div><h4>Before</h4>" + getattr(before, "data", str(before))
+            + "<h4>After</h4>" + getattr(after, "data", str(after))
+            + "</div>"
+        )
+
+    radio = widgets.ToggleButtons(options=["before", "after"], value="before")
+    out = widgets.Output()
+
+    def _redraw(_change=None):
+        out.clear_output(wait=True)
+        with out:
+            from IPython.display import display
+            display(before if radio.value == "before" else after)
+
+    radio.observe(_redraw, names="value")
+    _redraw()
+    return widgets.VBox([radio, out])
