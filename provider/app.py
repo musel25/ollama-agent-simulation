@@ -6,7 +6,7 @@ runs an AgreementRequested event-listener that drives mint+swap through the
 provider's own MCP via in-memory FastMCP Client.
 """
 import asyncio
-import json as _json
+import json
 import logging
 import os
 import time
@@ -124,7 +124,7 @@ async def _handle_agreement(escrow, agreement_id: int, args: dict) -> None:
                     "duration_seconds": pkg["durationSeconds"],
                 },
             )
-            mint_data = _json.loads(mint_result.content[0].text)
+            mint_data = json.loads(mint_result.content[0].text)
             token_id = int(mint_data["tokenId"])
             log.info(f"Minted tokenId={token_id} on slot {slot} for agreementId={agreement_id}")
 
@@ -226,7 +226,7 @@ async def probe(req: ProbeRequest) -> dict:
             "verify_bandwidth",
             {"src_ce": slot.ce, "dst_ce": dst_ce, "expected_mbps": float(mbps)},
         )
-        verify = _json.loads(result.content[0].text)
+        verify = json.loads(result.content[0].text)
 
     return {
         "timestamp": time.time(),

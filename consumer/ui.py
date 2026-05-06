@@ -15,7 +15,6 @@ import time
 
 import httpx
 import streamlit as st
-from web3 import Web3
 
 CONSUMER_BASE_URL = os.environ.get("CONSUMER_BASE_URL", "http://localhost:8001")
 PROVIDER_BASE_URL = os.environ.get("PROVIDER_BASE_URL", "http://localhost:8002")
