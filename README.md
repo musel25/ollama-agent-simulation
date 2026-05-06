@@ -8,6 +8,13 @@ This README is a landing page. The full documentation lives in [`docs/`](docs/).
 
 ---
 
+## Two ways to run
+
+- **Docker stack** (below): one command brings up Anvil, the agents, Ollama, and the dashboard.
+- **Notebooks** (`notebooks/01_*.ipynb` … `05_*.ipynb`): every layer in-process from Python; no Docker. See [`notebooks/README.md`](notebooks/README.md).
+
+---
+
 ## Quickstart
 
 ```bash
@@ -37,10 +44,11 @@ To stop everything: `make down` (or `make down-clean` to wipe state too).
 
 | If you want to... | Read |
 |---|---|
-| Understand what this is and why it exists | [`docs/01-introduction.md`](docs/01-introduction.md) |
-| Learn the words used in everything else | [`docs/02-concepts.md`](docs/02-concepts.md) |
+| Understand what this is and why | [`docs/01-introduction.md`](docs/01-introduction.md) |
+| Learn the vocabulary | [`docs/02-concepts.md`](docs/02-concepts.md) |
 | Read or modify the code | [`docs/03-architecture.md`](docs/03-architecture.md) |
 | Get it running on your machine | [`docs/04-running.md`](docs/04-running.md) |
+| See the whole flow from a Python kernel | [`notebooks/05_end_to_end.ipynb`](notebooks/05_end_to_end.ipynb) |
 
 If you've never seen this project before: read those docs in the order listed.
 
