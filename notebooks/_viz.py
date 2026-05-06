@@ -192,3 +192,57 @@ def render_chat_log(log: Iterable[dict]) -> HTML:
         f"<div style='font-family:system-ui;max-width:760px'>"
         f"{''.join(bubbles)}</div>"
     )
+
+
+_STATUS_PILL = {
+    "NONE":      ("#eee", "#555"),
+    "REQUESTED": ("#fff3cd", "#856404"),
+    "ACTIVE":    ("#d4edda", "#155724"),
+    "CLOSED":    ("#cce5ff", "#004085"),
+    "CANCELLED": ("#f8d7da", "#721c24"),
+}
+
+
+def _agreement_table(agreement_id: int, ag: dict) -> str:
+    rows: list[str] = []
+    for k in ("consumer", "provider", "bandwidthMbps", "durationSeconds",
+              "priceWei", "requestDeadline", "tokenId", "status"):
+        if k not in ag:
+            continue
+        v = ag[k]
+        rows.append(
+            f"<tr><td style='font-family:monospace;color:#555'>{k}</td>"
+            f"<td style='font-family:monospace'>{_html.escape(str(v))}</td></tr>"
+        )
+    status = str(ag.get("status", "NONE"))
+    bg, fg = _STATUS_PILL.get(status, ("#eee", "#555"))
+    pill = (
+        f"<span style='background:{bg};color:{fg};padding:3px 10px;"
+        f"border-radius:12px;font-weight:600;font-size:12px'>{status}</span>"
+    )
+    return (
+        f"<div style='font-family:system-ui;max-width:560px'>"
+        f"<div style='font-weight:600;margin-bottom:4px'>"
+        f"Agreement #{agreement_id} {pill}</div>"
+        f"<table style='border-collapse:collapse;font-size:13px'>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+    )
+
+
+def render_chain_status_from_dict(agreement_id: int, ag: dict) -> HTML:
+    """Render an Agreement struct (already a dict) with its colored status pill."""
+    return HTML(_agreement_table(agreement_id, ag))
+
+
+def render_chain_status(escrow, agreement_id: int) -> HTML:
+    """Render an Agreement looked up live from a web3 contract handle."""
+    raw = escrow.functions.getAgreement(int(agreement_id)).call()
+    # tuple order matches BandwidthEscrow.Agreement struct
+    ag = {
+        "consumer": raw[0], "provider": raw[1],
+        "bandwidthMbps": int(raw[2]), "durationSeconds": int(raw[3]),
+        "priceWei": int(raw[4]), "requestDeadline": int(raw[5]),
+        "tokenId": int(raw[6]),
+        "status": ("NONE", "REQUESTED", "ACTIVE", "CLOSED", "CANCELLED")[int(raw[7])],
+    }
+    return render_chain_status_from_dict(agreement_id, ag)
