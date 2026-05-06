@@ -246,3 +246,33 @@ def render_chain_status(escrow, agreement_id: int) -> HTML:
         "status": ("NONE", "REQUESTED", "ACTIVE", "CLOSED", "CANCELLED")[int(raw[7])],
     }
     return render_chain_status_from_dict(agreement_id, ag)
+
+
+def render_event_timeline(events: Iterable[dict]) -> HTML:
+    """Render a list of decoded chain events as a sortable HTML table."""
+    rows: list[str] = []
+    for e in events:
+        args = e.get("args") or {}
+        try:
+            args_json = json.dumps(args, default=str)
+        except Exception:
+            args_json = str(args)
+        rows.append(
+            f"<tr>"
+            f"<td>{int(e.get('block', 0))}</td>"
+            f"<td><code>{_html.escape(str(e.get('event', '?')))}</code></td>"
+            f"<td style='font-family:monospace;font-size:12px'>"
+            f"{_html.escape(args_json[:240])}"
+            f"{'…' if len(args_json) > 240 else ''}</td>"
+            f"<td>{int(e.get('gas', 0)):,}</td>"
+            f"<td><code style='font-size:11px'>"
+            f"{_html.escape(str(e.get('txHash', ''))[:16])}…</code></td>"
+            f"</tr>"
+        )
+    return HTML(
+        f"<table style='border-collapse:collapse;font-size:13px;font-family:system-ui'>"
+        f"<thead style='background:#f6f8fa'>"
+        f"<tr><th>block</th><th>event</th><th>args</th>"
+        f"<th>gas</th><th>tx</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>"
+    )
