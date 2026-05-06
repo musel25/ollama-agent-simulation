@@ -129,3 +129,38 @@ def render_mcp_tools(mcp) -> HTML:
         f"{grid}</div>"
     )
     return HTML(header)
+
+
+def render_state(state: dict, prev: dict | None = None) -> HTML:
+    """Pretty-print state as JSON; if prev given, highlight added/changed keys."""
+    keys = sorted(set(state) | set(prev or {}))
+    rows: list[str] = []
+    for k in keys:
+        new_val = state.get(k, "<missing>")
+        old_val = (prev or {}).get(k, "<absent>")
+        try:
+            new_json = json.dumps(new_val, default=str)
+        except Exception:
+            new_json = str(new_val)
+        if prev is None:
+            color, label = "#000", ""
+        elif k not in prev:
+            color, label = "#0a0", " ＋"
+        elif k not in state:
+            color, label = "#a00", " −"
+        elif new_val != old_val:
+            color, label = "#a60", " Δ"
+        else:
+            color, label = "#666", ""
+        rows.append(
+            f"<tr><td style='color:{color};font-family:monospace;"
+            f"vertical-align:top'>{_html.escape(k)}{label}</td>"
+            f"<td style='font-family:monospace;font-size:12px'>"
+            f"{_html.escape(new_json[:300])}"
+            f"{'…' if len(new_json) > 300 else ''}</td></tr>"
+        )
+    return HTML(
+        f"<table style='border-collapse:collapse;font-size:13px'>"
+        f"<thead><tr><th align='left'>key</th><th align='left'>value</th></tr>"
+        f"</thead><tbody>{''.join(rows)}</tbody></table>"
+    )
