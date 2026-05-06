@@ -1,87 +1,53 @@
-"""
-Consumer agent FastAPI service — port 8001.
+"""Consumer agent FastAPI service — port 8001.
 
-The workflow is driven by a LangGraph state machine (consumer/graph.py).
-Cross-agent calls (browse_catalog / request_quote / present_credential) are
-A2A under the hood, hidden by the MCP layer inside each graph node.
+Builds Config + MCP server + LangGraph in `lifespan`. Endpoints read
+state from `app.state`. Cross-agent calls go through the consumer MCP
+tools, which wrap A2A calls to the provider.
 """
+from __future__ import annotations
+
 import json
-import os
 import traceback
+from contextlib import asynccontextmanager
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastmcp import Client as MCPClient
 from google.protobuf.json_format import MessageToDict
 from pydantic import BaseModel, Field
-from web3 import Web3
 
 from consumer.agent_card import build_consumer_agent_card
-from consumer.graph import build_graph
-from consumer.mcp_server import mcp as consumer_mcp
+from consumer.graph import build_consumer_tools, build_graph
+from consumer.mcp_server import build_mcp_server
+from shared.chain import make_web3
 from shared.config import Config
 from shared.contracts import get_escrow_contract, get_nft_contract
 
-_RPC_URL = os.environ.get("RPC_URL", "http://localhost:8545")
-_w3 = Web3(Web3.HTTPProvider(_RPC_URL))
 
-DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
-PROVIDER_A2A_URLS = [u.strip() for u in
-                     os.environ.get("PROVIDER_A2A_URLS",
-                                    os.environ.get("PROVIDER_BASE_URL",
-                                                   "http://localhost:8002")).split(",")
-                     if u.strip()]
-
-_consumer_agent_card = build_consumer_agent_card(Config.from_env())
-_AGENT_CARD_JSON = MessageToDict(_consumer_agent_card, preserving_proto_field_name=True)
-
-inter_agent_log: list[dict] = []
-_logged: set[tuple[str, str]] = set()
-
-
-def _append(sender: str, message: str) -> None:
-    key = (sender, message)
-    if key in _logged:
-        return
-    _logged.add(key)
-    inter_agent_log.append({"from": sender, "message": message})
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    cfg = Config.from_env()
+    mcp, _quote_cache = build_mcp_server(cfg)
+    tools = build_consumer_tools(cfg)
+    graph = build_graph(cfg, tools)
+    card = build_consumer_agent_card(cfg)
+    app.state.cfg = cfg
+    app.state.mcp = mcp
+    app.state.graph = graph
+    app.state.agent_card_json = MessageToDict(card,
+                                              preserving_proto_field_name=True)
+    app.state.w3 = make_web3(cfg)
+    app.state.inter_agent_log = []
+    yield
 
 
-_compiled_graph = build_graph()
-
-
-async def run_consumer(user_message: str, model: str = DEFAULT_MODEL) -> tuple[str, list[dict], list[str]]:
-    inter_agent_log.clear()
-    _logged.clear()
-
-    initial: dict = {
-        "user_message": user_message,
-        "provider_url": PROVIDER_A2A_URLS[0],
-        "provider_urls": list(PROVIDER_A2A_URLS),
-        "model": model,
-        "log": [],
-        "thinking": [],
-    }
-    final = await _compiled_graph.ainvoke(initial)
-
-    # Mirror the graph's log into the module-level list the dashboard polls.
-    for entry in final.get("log", []):
-        _append(entry["from"], entry["message"])
-
-    return (
-        final.get("final_response", "(no response)"),
-        list(inter_agent_log),
-        final.get("thinking", []),
-    )
-
-
-app = FastAPI(title="Consumer Agent")
+app = FastAPI(title="Consumer Agent", lifespan=lifespan)
 
 
 class ChatRequest(BaseModel):
     message: str
-    model: str = DEFAULT_MODEL
+    model: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -90,42 +56,74 @@ class ChatResponse(BaseModel):
     thinking: list[str] = Field(default_factory=list)
 
 
+def _seen_keys(state) -> set:
+    return getattr(state, "_seen_log_keys", set())
+
+
+def _append_log(state, sender: str, message: str) -> None:
+    keys = _seen_keys(state)
+    key = (sender, message)
+    if key in keys:
+        return
+    keys.add(key)
+    state._seen_log_keys = keys
+    state.inter_agent_log.append({"from": sender, "message": message})
+
+
 @app.get("/.well-known/agent-card.json")
-def agent_card_canonical() -> dict:
-    return _AGENT_CARD_JSON
+def agent_card_canonical(request: Request) -> dict:
+    return request.app.state.agent_card_json
 
 
 @app.get("/.well-known/agent.json")
-def agent_card_legacy() -> dict:
-    return _AGENT_CARD_JSON
+def agent_card_legacy(request: Request) -> dict:
+    return request.app.state.agent_card_json
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
+async def chat(req: ChatRequest, request: Request) -> ChatResponse:
+    cfg: Config = request.app.state.cfg
+    request.app.state.inter_agent_log.clear()
+    request.app.state._seen_log_keys = set()
+    initial = {
+        "user_message": req.message,
+        "provider_url": cfg.provider_a2a_urls[0],
+        "provider_urls": list(cfg.provider_a2a_urls),
+        "model": req.model or cfg.ollama_model,
+        "log": [], "thinking": [],
+    }
     try:
-        response_text, log, thinking = await run_consumer(req.message, model=req.model)
-        return ChatResponse(response=response_text, log=log, thinking=thinking)
+        final = await request.app.state.graph.ainvoke(initial)
     except Exception as e:
         traceback.print_exc()
         return ChatResponse(response=f"INTERNAL ERROR: {e}", log=[], thinking=[])
+    for entry in final.get("log", []):
+        _append_log(request.app.state, entry["from"], entry["message"])
+    return ChatResponse(
+        response=final.get("final_response", "(no response)"),
+        log=list(request.app.state.inter_agent_log),
+        thinking=final.get("thinking", []),
+    )
 
 
 @app.get("/log")
-def get_log() -> list[dict]:
-    return list(inter_agent_log)
+def get_log(request: Request) -> list[dict]:
+    return list(request.app.state.inter_agent_log)
 
 
 @app.delete("/log")
-def clear_log() -> dict:
-    inter_agent_log.clear()
+def clear_log(request: Request) -> dict:
+    request.app.state.inter_agent_log.clear()
+    request.app.state._seen_log_keys = set()
     return {"cleared": True}
 
 
 @app.get("/catalog_proxy")
-async def catalog_proxy() -> list[dict]:
-    async with MCPClient(consumer_mcp) as c:
+async def catalog_proxy(request: Request) -> list[dict]:
+    cfg: Config = request.app.state.cfg
+    async with MCPClient(request.app.state.mcp) as c:
         result = await c.call_tool("browse_catalog",
-                                   {"provider_url": PROVIDER_A2A_URLS[0]})
+                                   {"provider_url": cfg.provider_a2a_urls[0]})
         text = result.content[0].text if result.content else ""
     if text.startswith("ERROR"):
         raise HTTPException(502, text)
@@ -133,22 +131,15 @@ async def catalog_proxy() -> list[dict]:
 
 
 @app.get("/address")
-async def consumer_address_endpoint() -> dict:
-    async with MCPClient(consumer_mcp) as c:
+async def consumer_address_endpoint(request: Request) -> dict:
+    async with MCPClient(request.app.state.mcp) as c:
         result = await c.call_tool("wallet_address", {})
     return {"address": result.content[0].text}
 
 
 @app.get("/check_token")
-async def check_token(tokenId: int) -> dict:
-    """UI-facing wrapper around the verify_credential MCP tool.
-
-    Reshapes {ok, owner, mbps, secondsRemaining, endpoint, ...} into the
-    {owner, status, seconds_remaining, bandwidth_mbps, endpoint} the NFT strip
-    expects. Status is derived from secondsRemaining since the consumer can't
-    observe SDN state directly.
-    """
-    async with MCPClient(consumer_mcp) as c:
+async def check_token(tokenId: int, request: Request) -> dict:
+    async with MCPClient(request.app.state.mcp) as c:
         result = await c.call_tool("verify_credential", {"token_id": int(tokenId)})
         text = result.content[0].text if result.content else ""
     if text.startswith("ERROR"):
@@ -173,16 +164,11 @@ class ProbeProxyRequest(BaseModel):
 
 
 @app.post("/probe_proxy")
-async def probe_proxy(req: ProbeProxyRequest) -> dict:
-    """Forward an iperf3 probe to the provider that allocated the slot.
-
-    Picks the first provider from PROVIDER_A2A_URLS — fine for the single-
-    provider demo. The provider's /probe looks up the slot bound to the
-    NFT's agreementId and runs verify_bandwidth (mocked under SDN_MOCK=true).
-    """
-    if not PROVIDER_A2A_URLS:
-        raise HTTPException(500, "no PROVIDER_A2A_URLS configured")
-    target = f"{PROVIDER_A2A_URLS[0]}/probe"
+async def probe_proxy(req: ProbeProxyRequest, request: Request) -> dict:
+    cfg: Config = request.app.state.cfg
+    if not cfg.provider_a2a_urls:
+        raise HTTPException(500, "no provider_a2a_urls configured")
+    target = f"{cfg.provider_a2a_urls[0]}/probe"
     try:
         async with httpx.AsyncClient(timeout=30.0) as http:
             r = await http.post(target, json={"tokenId": int(req.tokenId)})
@@ -196,16 +182,12 @@ async def probe_proxy(req: ProbeProxyRequest) -> dict:
 
 
 @app.get("/chain_events")
-def chain_events(since_block: int = 0) -> list[dict]:
-    """Return escrow + NFT events emitted since `since_block`.
-
-    Used by the dashboard to populate the on-chain panel. Each event:
-      {event, args, block, txHash, gas}
-    where args is a JSON-safe dict of the event's indexed/non-indexed args.
-    """
-    escrow = get_escrow_contract(_w3)
-    nft = get_nft_contract(_w3)
-    to_block = _w3.eth.block_number
+def chain_events(since_block: int = 0, request: Request = None) -> list[dict]:
+    """Return escrow + NFT events emitted since `since_block`."""
+    w3 = request.app.state.w3
+    escrow = get_escrow_contract(w3)
+    nft = get_nft_contract(w3)
+    to_block = w3.eth.block_number
 
     def _serialize(args) -> dict:
         out = {}
@@ -215,37 +197,31 @@ def chain_events(since_block: int = 0) -> list[dict]:
             elif hasattr(v, "hex") and not isinstance(v, (int, str)):
                 out[k] = v.hex()
             else:
-                out[k] = str(v) if not isinstance(v, (int, str, bool, type(None))) else v
+                out[k] = (str(v) if not isinstance(v, (int, str, bool, type(None)))
+                          else v)
         return out
 
-    def _gather(get_logs_fn, name: str) -> list[dict]:
+    def _gather_named(contract, name: str) -> list[dict]:
+        evt = getattr(contract.events, name, None)
+        if evt is None:
+            return []
         try:
-            logs = get_logs_fn(fromBlock=since_block, toBlock=to_block)
+            logs = evt.get_logs(fromBlock=since_block, toBlock=to_block)
         except Exception:
             return []
         out = []
-        for evt in logs:
-            tx_hash = evt["transactionHash"].hex() if hasattr(evt["transactionHash"], "hex") else str(evt["transactionHash"])
+        for e in logs:
+            tx_hash = (e["transactionHash"].hex()
+                       if hasattr(e["transactionHash"], "hex")
+                       else str(e["transactionHash"]))
             try:
-                gas = int(_w3.eth.get_transaction_receipt(tx_hash)["gasUsed"])
+                gas = int(w3.eth.get_transaction_receipt(tx_hash)["gasUsed"])
             except Exception:
                 gas = 0
-            out.append({
-                "event": name,
-                "args": _serialize(evt["args"]),
-                "block": int(evt["blockNumber"]),
-                "txHash": tx_hash,
-                "gas": gas,
-            })
+            out.append({"event": name, "args": _serialize(e["args"]),
+                        "block": int(e["blockNumber"]),
+                        "txHash": tx_hash, "gas": gas})
         return out
-
-    def _gather_named(contract, event_name: str):
-        # Be defensive: if the deployed ABI doesn't have the event,
-        # skip it rather than 500 the whole endpoint.
-        evt = getattr(contract.events, event_name, None)
-        if evt is None:
-            return []
-        return _gather(evt.get_logs, event_name)
 
     events: list[dict] = []
     for name in ("AgreementRequested", "AgreementActive", "AgreementCancelled"):

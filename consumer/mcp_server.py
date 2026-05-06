@@ -188,33 +188,3 @@ def build_mcp_server(cfg: Config) -> tuple[FastMCP, dict]:
             return f"ERROR: {e}"
 
     return mcp, quote_cache
-
-
-# Backwards-compat shim — removed when consumer/app.py and consumer/graph.py
-# land on the new factory shape (Tasks 11 and 14).
-def _build_default():
-    cfg = Config.from_env()
-    if not cfg.consumer_private_key:
-        return None, {}
-    return build_mcp_server(cfg)
-
-
-mcp, quote_cache = _build_default()
-
-# Expose the closure-bound tool callables so consumer/graph.py can keep
-# importing them by name until Task 11 swaps to the tools-dict shape.
-if mcp is not None:
-    # FastMCP stores tools under keys like "tool:<name>@" in _local_provider._components.
-    # The plan flagged this as fragile — see Task 11 for the migration that drops it.
-    _components = mcp._local_provider._components  # type: ignore[attr-defined]
-    _tools = {
-        v.name: v for k, v in _components.items() if k.startswith("tool:")
-    }
-    wallet_address      = _tools["wallet_address"].fn
-    lock_payment        = _tools["lock_payment"].fn
-    await_settlement    = _tools["await_settlement"].fn
-    verify_credential   = _tools["verify_credential"].fn
-    discover_provider   = _tools["discover_provider"].fn
-    browse_catalog      = _tools["browse_catalog"].fn
-    request_quote       = _tools["request_quote"].fn
-    present_credential  = _tools["present_credential"].fn
