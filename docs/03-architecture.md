@@ -1,6 +1,6 @@
 # Architecture Reference
 
-> **Audience:** developers reading or modifying the code. Assumes you have already read [`01-introduction.md`](01-introduction.md) and the concepts you need from [`02-concepts.md`](02-concepts.md). For end-to-end behaviour, read [`03-walkthrough.md`](03-walkthrough.md) first.
+> **Audience:** developers reading or modifying the code. Assumes you have already read [`01-introduction.md`](01-introduction.md) and the concepts you need from [`02-concepts.md`](02-concepts.md).
 
 ---
 

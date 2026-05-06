@@ -18,19 +18,19 @@ Three reader profiles:
 
 You've heard "AI agent" and "blockchain" but you don't write code, or you write code but in a different domain. You want to understand what this project does and how, without slogging through it.
 
-**Read in this order:** [`README.md`](../README.md) → [`01-introduction.md`](01-introduction.md) (this doc) → [`02-concepts.md`](02-concepts.md) → [`03-walkthrough.md`](03-walkthrough.md). Stop there. You'll have a solid mental model.
+**Read in this order:** [`README.md`](../README.md) → [`01-introduction.md`](01-introduction.md) (this doc) → [`02-concepts.md`](02-concepts.md). Stop there. You'll have a solid mental model.
 
 ### B. Developer
 
 You want to read or modify the code.
 
-**Read in this order:** [`README.md`](../README.md) → [`03-walkthrough.md`](03-walkthrough.md) (skim) → [`04-architecture.md`](04-architecture.md) → [`06-modifying.md`](06-modifying.md). Use [`02-concepts.md`](02-concepts.md) as a glossary when you hit unfamiliar terms.
+**Read in this order:** [`README.md`](../README.md) → [`03-architecture.md`](03-architecture.md) → [`04-running.md`](04-running.md). Use [`02-concepts.md`](02-concepts.md) as a glossary when you hit unfamiliar terms.
 
 ### C. Researcher / paper reader
 
 You're checking whether the paper's claims map to working code.
 
-**Read in this order:** [`README.md`](../README.md) → [`03-walkthrough.md`](03-walkthrough.md) → [`04-architecture.md`](04-architecture.md) → [`paper-alignment.md`](paper-alignment.md). The last one specifically tracks where the paper and the code diverge.
+**Read in this order:** [`README.md`](../README.md) → [`03-architecture.md`](03-architecture.md) → [`04-running.md`](04-running.md). Use [`02-concepts.md`](02-concepts.md) as a glossary.
 
 ## What you'll learn from the docs
 

@@ -11,7 +11,7 @@ This README is a landing page. The full documentation lives in [`docs/`](docs/).
 ## Quickstart
 
 ```bash
-# 1. Install prereqs (see docs/05-running.md for details):
+# 1. Install prereqs (see docs/04-running.md for details):
 #    Foundry, Docker, Ollama, uv
 
 # 2. Copy the example env file
@@ -39,11 +39,8 @@ To stop everything: `make down` (or `make down-clean` to wipe state too).
 |---|---|
 | Understand what this is and why it exists | [`docs/01-introduction.md`](docs/01-introduction.md) |
 | Learn the words used in everything else | [`docs/02-concepts.md`](docs/02-concepts.md) |
-| See a successful run, stage by stage | [`docs/03-walkthrough.md`](docs/03-walkthrough.md) |
-| Read or modify the code | [`docs/04-architecture.md`](docs/04-architecture.md) |
-| Get it running on your machine | [`docs/05-running.md`](docs/05-running.md) |
-| Change something safely | [`docs/06-modifying.md`](docs/06-modifying.md) |
-| Understand how the code maps to the paper | [`docs/paper-alignment.md`](docs/paper-alignment.md) |
+| Read or modify the code | [`docs/03-architecture.md`](docs/03-architecture.md) |
+| Get it running on your machine | [`docs/04-running.md`](docs/04-running.md) |
 
 If you've never seen this project before: read those docs in the order listed.
 
@@ -69,7 +66,7 @@ If you've never seen this project before: read those docs in the order listed.
 - **Python 3.13** with `uv` for environment management
 - **FastAPI** for the agent HTTP servers, **Streamlit** for the UI
 - **FastMCP** for the MCP servers, **a2a-sdk** for inter-agent calls
-- **Ollama** running `llama3.2:3b` locally (swappable; see [`docs/05-running.md`](docs/05-running.md))
+- **Ollama** running `llama3.2:3b` locally (swappable; see [`docs/04-running.md`](docs/04-running.md))
 - **Solidity 0.8.x** + **Foundry/Anvil** for the smart-contract layer
 - **`tc tbf`** + **gNMI** for SDN bandwidth enforcement (mock by default; real path uses [`srl-gnmi-bandwidth-poc`](https://github.com/musel25/srl-gnmi-bandwidth-poc))
 
