@@ -124,8 +124,6 @@ of them:
 | `PROVIDER_ADDRESS` | Ethereum address derived from `PROVIDER_PRIVATE_KEY` (used in the escrow contract) |
 | `CONSUMER_PRIVATE_KEY` | Signs consumer-side on-chain calls (requestAgreement) |
 | `CONSUMER_ADDRESS` | Ethereum address derived from `CONSUMER_PRIVATE_KEY` |
-| `CONSUMER_PRIVATE_KEY_2` | Second consumer EOA — only needed for multi-consumer mode |
-| `CONSUMER_ADDRESS_2` | Ethereum address derived from `CONSUMER_PRIVATE_KEY_2` |
 
 Each `*_PRIVATE_KEY` has a corresponding `*_ADDRESS` that **must stay in
 sync**. The `.env.example` defaults already pair them correctly for the
@@ -148,16 +146,15 @@ pointing at a different host.
 | `OLLAMA_HOST` | `http://ollama:11434` | Use `http://localhost:11434` for bare-metal |
 | `PROVIDER_BASE_URL` | `http://provider-agent:8002` | Consumer uses this to reach the provider |
 | `PROVIDER_A2A_URLS` | `http://provider-agent:8002` | A2A discovery URL list (comma-separated) |
-| `PROVIDER_AGENT_CARD_URL` | `http://provider-agent:8002/.well-known/agent-card.json` | A2A agent card location |
 
 The `.env.example` uses `http://localhost:*` values. The Docker Compose
 `environment:` blocks override these with container-network hostnames at
 runtime, so the file values only matter for bare-metal.
 
-> **Note:** `OLLAMA_HOST` and `PROVIDER_AGENT_CARD_URL` are injected
-> automatically by `docker-compose.yml` and do **not** need to be set in
-> `.env` for Docker-based runs. For bare-metal (terminal mode), set them
-> manually if your host or port differs from the defaults above.
+> **Note:** `OLLAMA_HOST` is injected automatically by `docker-compose.yml`
+> and does **not** need to be set in `.env` for Docker-based runs. For
+> bare-metal (terminal mode), set it manually if your host or port differs
+> from the defaults above.
 
 ---
 
@@ -347,30 +344,6 @@ by the provider. Both fields being present confirms the atomic swap succeeded.
 **(3) Inventory** — the provider's slot table after the purchase. One slot
 in the `medium` tier should now show a taken entry with an expiry timestamp,
 confirming the slot is leased.
-
----
-
-## Multi-consumer mode
-
-The `multi-consumer` Docker Compose profile brings up a second consumer agent:
-
-```bash
-docker compose --profile multi-consumer up -d
-```
-
-This starts `consumer-agent-2` on port `:8011` using `CONSUMER_PRIVATE_KEY_2`
-(Anvil account[3]). The primary `consumer-agent` remains on `:8001`.
-
-Both consumers operate independently and hold separate Ethereum EOAs, so their
-on-chain purchases do not interfere. Use this mode to test concurrent purchases
-against the same slot pool — the provider uses `fcntl`-based file locking on
-`inventory.txt` to ensure slot counts stay consistent under concurrency.
-
-To chat with the second consumer:
-
-- Browser: open **http://localhost:8501** and the UI will use `consumer-agent`
-  (`:8001`) by default.
-- API: `POST http://localhost:8011/chat` directly.
 
 ---
 
@@ -565,8 +538,7 @@ pre-funded. If you replaced any key with a non-Anvil key, that address has
 zero ETH.
 
 **Fix.**
-1. Revert `CONSUMER_PRIVATE_KEY` (and `CONSUMER_PRIVATE_KEY_2`) in `.env` to
-   the `.env.example` defaults.
+1. Revert `CONSUMER_PRIVATE_KEY` in `.env` to the `.env.example` default.
 2. Alternatively, fund your custom address via the Anvil console:
    ```bash
    cast send <your-address> --value 10ether \
@@ -613,3 +585,32 @@ a bug in the agents.
 3. If the wrong tier is consistently selected regardless of model, open the
    provider logs to verify the catalog is returning the expected tiers:
    `docker compose logs provider-agent`.
+
+---
+
+## Notebook path (no Docker)
+
+The `notebooks/` directory contains five Jupyter notebooks that exercise every layer in-process. No Docker, no `make`, no compose — just `anvil`, `forge`, and (for notebook 05) `ollama`.
+
+### Prerequisites
+
+- `anvil` + `forge` (install from [Foundry](https://book.getfoundry.sh/getting-started/installation))
+- Python 3.13 + `uv`
+- For notebook 05 only: `ollama serve` running with `llama3.2:3b` pulled (`ollama pull llama3.2:3b`)
+
+### Run
+
+```bash
+uv sync
+uv run jupyter lab notebooks/
+```
+
+Open the notebooks in order:
+
+1. `01_chain.ipynb` — deploy the contracts, walk one trade.
+2. `02_mcp.ipynb` — exercise the provider's MCP tools in-process.
+3. `03_a2a.ipynb` — drive the provider's A2A executor without a port.
+4. `04_consumer_graph.ipynb` — step through the consumer's LangGraph state machine.
+5. `05_end_to_end.ipynb` — full negotiation, end-to-end (uses Ollama).
+
+Each notebook is self-contained: it spins up everything it needs in a `try`, demonstrates the layer, and tears down in a `finally`.

@@ -17,6 +17,18 @@ from google.protobuf.struct_pb2 import Struct, Value
 from provider.agent_executor import BandwidthProviderExecutor
 
 
+@pytest.fixture
+def executor():
+    from provider.mcp_server import build_mcp_server
+    from shared.config import Config
+    cfg = Config(
+        provider_private_key="0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+        sdn_mock=True,
+    )
+    mcp, _ = build_mcp_server(cfg)
+    return BandwidthProviderExecutor(mcp)
+
+
 class FakeQueue:
     def __init__(self):
         self.events = []
@@ -47,8 +59,8 @@ def _artifact_payload(event) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_executor_returns_catalog():
-    ex = BandwidthProviderExecutor()
+async def test_executor_returns_catalog(executor):
+    ex = executor
     queue = FakeQueue()
     ctx = _make_context({"action": "get_catalog"})
 
@@ -61,8 +73,8 @@ async def test_executor_returns_catalog():
 
 
 @pytest.mark.asyncio
-async def test_executor_unknown_action_emits_error():
-    ex = BandwidthProviderExecutor()
+async def test_executor_unknown_action_emits_error(executor):
+    ex = executor
     queue = FakeQueue()
     ctx = _make_context({"action": "no_such_action"})
 
@@ -74,8 +86,8 @@ async def test_executor_unknown_action_emits_error():
 
 
 @pytest.mark.asyncio
-async def test_executor_returns_quote():
-    ex = BandwidthProviderExecutor()
+async def test_executor_returns_quote(executor):
+    ex = executor
     queue = FakeQueue()
     ctx = _make_context({
         "action": "request_quote",

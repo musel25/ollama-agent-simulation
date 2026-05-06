@@ -1,6 +1,16 @@
 # Architecture Reference
 
-> **Audience:** developers reading or modifying the code. Assumes you have already read [`01-introduction.md`](01-introduction.md) and the concepts you need from [`02-concepts.md`](02-concepts.md). For end-to-end behaviour, read [`03-walkthrough.md`](03-walkthrough.md) first.
+> **Audience:** developers reading or modifying the code. Assumes you have already read [`01-introduction.md`](01-introduction.md) and the concepts you need from [`02-concepts.md`](02-concepts.md).
+
+> **Where to make changes** (folded in from the old `06-modifying.md`):
+>
+> - **Add a new tier** → `provider/catalog.py` (CATALOG list) + `provider/inventory.txt` (one row per tier).
+> - **Add a consumer MCP tool** → `consumer/mcp_server.py` inside `build_mcp_server`. If it should drive a graph node, add a key to `build_consumer_tools` and a node to `consumer/graph.py`.
+> - **Add a provider MCP tool** → `provider/mcp_server.py` inside `build_mcp_server`. If it should be triggered by an A2A action, route it from `provider/agent_executor.py`.
+> - **Change escrow / NFT semantics** → `contracts/src/*.sol`. Re-deploy via `make contracts` (Docker) or `shared.deploy.deploy_contracts(cfg)` (notebooks).
+> - **Tweak the LangGraph flow** → `consumer/graph.py`'s `build_graph()`. Each node is a closure; add or reorder them in the builder section at the bottom.
+> - **Change SDN backend** → swap the `srl_bandwidth.*` calls inside `provider/mcp_server.py`'s `allocate_bandwidth` / `revoke_bandwidth` / `verify_bandwidth` tools.
+> - **Change config** → add a field to `Config` in `shared/config.py` and read it from `Config.from_env()`.
 
 ---
 
@@ -278,19 +288,20 @@ consumer/app.py :8001         (FastAPI — owns the LLM agentic loop)
 
 ### Boot sequence — Provider (`provider/app.py`)
 
-1. Module-level: `w3` and `provider_account` initialized from `RPC_URL` + `PROVIDER_PRIVATE_KEY`
-2. `_mcp_http_app = mcp.http_app()` — FastMCP creates its Starlette sub-application
-3. `lifespan` context manager is registered on the FastAPI app
-4. **On startup** (inside `lifespan`): `_mcp_http_app.lifespan(app)` context entered (FastMCP initializes its transport), then `asyncio.create_task(_event_listener())` spawns the blockchain event poll loop
-5. `_event_listener()` polls `escrow.events.AgreementRequested.get_logs(...)` every 2 seconds. On each matching event, spawns `asyncio.create_task(_handle_agreement(...))` which mints NFT → approves escrow → calls `deposit()`
-6. REST routes respond immediately; MCP endpoint at `/mcp` serves tool discovery and calls
+Each FastAPI app builds its `Config`, MCP server, A2A client, and graph in `lifespan` and stashes them on `app.state`. Modules expose factories (`build_graph(cfg, tools)`, `build_mcp_server(cfg)`) — no module-level state.
+
+1. **On startup** (inside `lifespan`): `Config.from_env()` resolves env vars; `make_web3(cfg)` builds the `w3` client and provider account; `build_mcp_server(cfg)` returns the FastMCP server; the FastMCP transport is entered and mounted at `/mcp`
+2. `asyncio.create_task(event_listener(...))` spawns the blockchain event poll loop (extracted to `provider/event_listener.py`)
+3. `event_listener` polls `escrow.events.AgreementRequested.get_logs(...)` every 2 seconds. On each matching event, spawns `_handle_agreement(...)` which mints NFT → approves escrow → calls `deposit()`
+4. REST routes respond immediately; MCP endpoint at `/mcp` serves tool discovery and calls
 
 ### Boot sequence — Consumer (`consumer/app.py`)
 
-1. Module-level: `w3`, `consumer_account`, `inter_agent_log`, `_logged_interactions` initialized
-2. FastAPI app registered with no lifespan hooks
-3. On `POST /chat`: calls `run_consumer(message, model)` which is an `async` function
-4. Inside `run_consumer`: `await get_provider_tools()` opens an MCP client session to `PROVIDER_MCP_URL` to fetch tool schemas; builds combined tool list; enters the 12-iteration LLM loop
+Same factory pattern: `Config.from_env()` → `make_web3(cfg)` → `build_mcp_server(cfg)` → `build_graph(cfg, tools)`, all inside `lifespan` and attached to `app.state`.
+
+1. **On startup** (inside `lifespan`): config + web3 + MCP server are constructed; the consumer's MCP tools (and any A2A-bound provider tools) are bound; `build_graph(cfg, tools)` returns a compiled LangGraph state machine
+2. On `POST /chat`: pulls the graph and tool registry off `app.state` and invokes `graph.ainvoke(...)` with the user message
+3. The graph drives the deterministic node sequence (`discover_node` → `browse_node` → `pick_tier_node` → `quote_node` → ...), each calling exactly one MCP tool
 
 ### Contract deployment (one-time, `contracts/script/Deploy.s.sol`)
 
@@ -387,13 +398,13 @@ Quote TTL is 60 seconds. Cleanup happens inside `_handle_agreement()` before pro
 
 One JSON line per tier. Leases with `expiresAt < time.time()` are pruned on every read.
 
-### Python: Inter-agent log entry (`consumer/app.py:38`)
+### Python: Inter-agent log entry
 
 ```python
 {"from": "consumer"|"provider", "message": str}
 ```
 
-Stored in module-level `inter_agent_log: list[dict]`. Cleared at the start of each `run_consumer()` call.
+Held inside the per-request graph state (LangGraph `AgentState`). Each `/chat` invocation gets a fresh list — no module-level mutable globals.
 
 ### Python: ChatRequest / ChatResponse (`consumer/app.py:358`)
 
@@ -453,8 +464,8 @@ ChatResponse: { response: str, log: list[dict], thinking: list[str] }
 | GET | `/.well-known/agent-card.json` | — | proto-derived AgentCard dict | none |
 | GET | `/.well-known/agent.json` | — | alias | none |
 | POST | `/chat` | `ChatRequest` | `ChatResponse` | runs LLM loop over Client(consumer_mcp); on-chain txs via lock_payment; A2A round-trips inside browse/quote/present tools |
-| GET | `/log` | — | `list[dict]` | none |
-| DELETE | `/log` | — | `{"cleared": True}` | clears `inter_agent_log` |
+| GET | `/log` | — | `list[dict]` | returns the most recent graph-run log |
+| DELETE | `/log` | — | `{"cleared": True}` | resets the cached log on `app.state` |
 | GET | `/catalog_proxy` | — | `list[dict]` | calls consumer MCP `browse_catalog(provider_url=PROVIDER_A2A_URLS[0])` |
 | GET | `/address` | — | `{"address": str}` | calls consumer MCP `wallet_address` |
 
@@ -503,7 +514,7 @@ A2A-bound (open a fresh `a2a-sdk` client per call, via `consumer/a2a_client.send
 | State | Location | Type | Lifetime |
 |---|---|---|---|
 | Quote cache | `consumer/mcp_server.py:quote_cache` | `dict[str, dict]` in-memory | Process lifetime; populated by `request_quote` MCP tool on successful A2A round-trip |
-| Inter-agent log | `consumer/app.py:inter_agent_log` | `list[dict]` in-memory | Cleared at each `run_consumer()` call |
+| Inter-agent log | LangGraph `AgentState["log"]` | `list[dict]` per request | Created fresh on each `/chat` invocation |
 | LLM message history | Local var in `run_consumer()` | `list[dict]` | Per-request; discarded after response |
 
 ### UI state (Streamlit session_state)
@@ -655,7 +666,7 @@ The `consumer-agent` service sets `OLLAMA_HOST=http://ollama:11434`. If you run 
 |---|---|---|
 | `provider/app.py` | MCP lifespan nesting; mount ordering; event listener task; `_send_tx` compat shim | MCP tools still discoverable at `/mcp`; provider REST routes still respond; AgreementRequested events still handled |
 | `provider/catalog.py` | File locking logic; quote TTL; inventory slot math | Run `tests/test_catalog.py`; verify slot counts decrement and rewind correctly |
-| `consumer/app.py` | LangGraph graph construction; MCPClient session lifecycle; inter_agent_log clearing | Full end-to-end purchase still completes; inter-agent log still populated correctly |
+| `consumer/app.py` | `lifespan` wires `Config` → MCP server → graph and stashes them on `app.state`; do not introduce module-level state | Full end-to-end purchase still completes; inter-agent log (in `AgentState`) still populated correctly |
 | `shared/contracts.py` | Single source for contract addresses and ABIs; all services depend on it | Any change here breaks all three services simultaneously |
 | `contracts/src/BandwidthEscrow.sol` | ABI changes require regenerating `shared/abi/BandwidthEscrow.json` and redeploying | After Solidity change: `forge build`, copy ABI, redeploy, update `local.json` |
 | `contracts/src/BandwidthNFT.sol` | Same as above; also: changing `TokenMetadata` struct fields breaks `_extract_token_id` and MCP tool tuple unpacking | Same as above, plus verify `provider/mcp_server.py:135` tuple unpack matches new struct order |

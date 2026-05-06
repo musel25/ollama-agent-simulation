@@ -13,23 +13,22 @@ import time
 from fastmcp import Client as MCPClient
 
 from provider.catalog import slot_pool
-from provider.mcp_server import mcp
 
 log = logging.getLogger("provider.expiry")
 
 
-async def expiry_sweep_loop(period_seconds: int = 30) -> None:
+async def expiry_sweep_loop(mcp, period_seconds: int = 30) -> None:
     """Run forever: every period_seconds, revoke SDN for any expired slot."""
     log.info("Expiry sweep started, period=%ss", period_seconds)
     while True:
         await asyncio.sleep(period_seconds)
         try:
-            await _sweep_once()
+            await _sweep_once(mcp)
         except Exception:
             log.exception("expiry sweep error")
 
 
-async def _sweep_once() -> None:
+async def _sweep_once(mcp) -> None:
     now = time.time()
     # SlotPool reclaims expired entries on read; capture them *before* the
     # next read clears them by reading the raw rows directly.

@@ -36,7 +36,6 @@ from google.protobuf.json_format import MessageToDict, ParseDict
 from google.protobuf.struct_pb2 import Struct, Value
 
 from provider.catalog import slot_pool
-from provider.mcp_server import mcp
 from shared.a2a_messages import (
     ActivateRequest,
     BrowseCatalogRequest,
@@ -70,6 +69,9 @@ def _make_data_part(data: dict) -> Part:
 
 
 class BandwidthProviderExecutor(AgentExecutor):
+    def __init__(self, mcp):
+        self._mcp = mcp
+
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id
         context_id = context.context_id
@@ -107,13 +109,13 @@ class BandwidthProviderExecutor(AgentExecutor):
         )
 
     async def _handle_catalog(self, queue: EventQueue, task_id: str, context_id: str) -> None:
-        async with MCPClient(mcp) as client:
+        async with MCPClient(self._mcp) as client:
             result = await client.call_tool("get_catalog", {})
             payload = json.loads(result.content[0].text)
         await self._emit_data(queue, task_id, context_id, {"catalog": payload})
 
     async def _handle_quote(self, queue: EventQueue, task_id: str, context_id: str, req: QuoteRequest) -> None:
-        async with MCPClient(mcp) as client:
+        async with MCPClient(self._mcp) as client:
             result = await client.call_tool("request_quote", {
                 "package_id": req.package_id,
                 "consumer_address": req.consumer_address,
@@ -130,7 +132,7 @@ class BandwidthProviderExecutor(AgentExecutor):
         })
 
     async def _handle_activate(self, queue: EventQueue, task_id: str, context_id: str, req: ActivateRequest) -> None:
-        async with MCPClient(mcp) as client:
+        async with MCPClient(self._mcp) as client:
             verify = await client.call_tool(
                 "verify_credential_ownership",
                 {"token_id": req.token_id, "signature": req.signature, "nonce": req.nonce},

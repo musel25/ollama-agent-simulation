@@ -15,5 +15,5 @@ Key modules:
     a2a_client    — A2A SDK client wrapping calls to the provider
     agent_card    — Builds the published Agent Card
 
-See docs/04-architecture.md for the full picture.
+See docs/03-architecture.md for the full picture.
 """

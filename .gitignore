@@ -10,3 +10,5 @@ contracts/deployments/local.json
 .pytest_cache/
 .venv/
 .solc-cache/
+contracts/broadcast/
+notebooks/.ipynb_checkpoints/
