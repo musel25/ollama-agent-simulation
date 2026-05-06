@@ -243,16 +243,3 @@ def build_mcp_server(cfg: Config) -> tuple[FastMCP, deque]:
             _srl_verify(src_ce, dst_ce, expected_mbps, tolerance)))
 
     return mcp, tool_log
-
-
-# Backwards-compat shim — removed in Task 15.
-# Allows provider/app.py and provider/expiry.py to keep importing `mcp` and
-# `tool_call_log` until the lifespan refactor lands.
-def _build_default():
-    cfg = Config.from_env()
-    if cfg.provider_private_key:
-        return build_mcp_server(cfg)
-    return None, None
-
-
-mcp, tool_call_log = _build_default()
