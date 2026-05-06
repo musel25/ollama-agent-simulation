@@ -20,6 +20,7 @@ from web3 import Web3
 from consumer.agent_card import build_consumer_agent_card
 from consumer.graph import build_graph
 from consumer.mcp_server import mcp as consumer_mcp
+from shared.config import Config
 from shared.contracts import get_escrow_contract, get_nft_contract
 
 _RPC_URL = os.environ.get("RPC_URL", "http://localhost:8545")
@@ -32,7 +33,7 @@ PROVIDER_A2A_URLS = [u.strip() for u in
                                                    "http://localhost:8002")).split(",")
                      if u.strip()]
 
-_consumer_agent_card = build_consumer_agent_card()
+_consumer_agent_card = build_consumer_agent_card(Config.from_env())
 _AGENT_CARD_JSON = MessageToDict(_consumer_agent_card, preserving_proto_field_name=True)
 
 inter_agent_log: list[dict] = []
