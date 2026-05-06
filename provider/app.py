@@ -35,6 +35,7 @@ from provider.catalog import (
     slot_pool,
 )
 from provider.mcp_server import mcp, tool_call_log
+from shared.config import Config
 from shared.contracts import get_escrow_contract, get_nft_contract
 
 # CE peer pairs across pe1 ↔ pe2 (defined by the clab topology in
@@ -51,7 +52,7 @@ w3 = Web3(Web3.HTTPProvider(RPC_URL))
 provider_account = Account.from_key(PROVIDER_PRIVATE_KEY)
 PROVIDER_ADDRESS = provider_account.address
 
-_provider_agent_card = build_provider_agent_card()
+_provider_agent_card = build_provider_agent_card(Config.from_env())
 _AGENT_CARD_JSON = MessageToDict(_provider_agent_card, preserving_proto_field_name=True)
 
 
