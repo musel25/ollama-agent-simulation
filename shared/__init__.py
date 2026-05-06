@@ -11,5 +11,5 @@ Key modules:
 
 ABIs are stored as JSON under shared/abi/.
 
-See docs/04-architecture.md for the full picture.
+See docs/03-architecture.md for the full picture.
 """
