@@ -14,6 +14,8 @@ from eth_account.signers.local import LocalAccount
 from web3 import Web3
 from web3.contract import Contract
 
+from shared.config import Config
+
 # Mirrors the BandwidthEscrow.Status enum. Used to render the status slot
 # returned by escrow.getAgreement(...) (`ag[7]`) as a readable name.
 STATUS_NAMES: dict[int, str] = {
@@ -68,3 +70,8 @@ def extract_token_id(receipt: dict, nft_contract: Contract) -> int:
     if not transfers:
         raise RuntimeError("Transfer event not found in mint receipt")
     return int(transfers[0]["args"]["tokenId"])
+
+
+def make_web3(cfg: Config) -> Web3:
+    """Build a Web3 HTTP provider client pointing at `cfg.rpc_url`."""
+    return Web3(Web3.HTTPProvider(cfg.rpc_url))
