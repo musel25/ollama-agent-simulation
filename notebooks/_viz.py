@@ -164,3 +164,31 @@ def render_state(state: dict, prev: dict | None = None) -> HTML:
         f"<thead><tr><th align='left'>key</th><th align='left'>value</th></tr>"
         f"</thead><tbody>{''.join(rows)}</tbody></table>"
     )
+
+
+_BUBBLE_COLORS = {
+    "consumer": ("#e3f2fd", "#0d47a1"),  # blue
+    "provider": ("#e8f5e9", "#1b5e20"),  # green
+    "system":   ("#fff3e0", "#e65100"),  # orange
+}
+
+
+def render_chat_log(log: Iterable[dict]) -> HTML:
+    """Render an inter-agent log as chat bubbles, color-coded by sender."""
+    bubbles: list[str] = []
+    for entry in log:
+        sender = (entry.get("from") or "").lower()
+        bg, fg = _BUBBLE_COLORS.get(sender, ("#f0f0f0", "#222"))
+        align = "flex-start" if sender == "consumer" else "flex-end"
+        text = _html.escape(str(entry.get("message", "")))
+        bubbles.append(
+            f"<div style='display:flex;justify-content:{align};margin:4px 0'>"
+            f"<div style='background:{bg};color:{fg};padding:6px 10px;"
+            f"border-radius:12px;max-width:70%;font-family:system-ui;font-size:13px'>"
+            f"<div style='font-size:10px;opacity:0.7;text-transform:uppercase'>"
+            f"{_html.escape(sender)}</div>{text}</div></div>"
+        )
+    return HTML(
+        f"<div style='font-family:system-ui;max-width:760px'>"
+        f"{''.join(bubbles)}</div>"
+    )
