@@ -249,10 +249,7 @@ def build_mcp_server(cfg: Config) -> tuple[FastMCP, deque]:
 # Allows provider/app.py and provider/expiry.py to keep importing `mcp` and
 # `tool_call_log` until the lifespan refactor lands.
 def _build_default():
-    cfg = Config(
-        provider_private_key=__import__("os").environ.get("PROVIDER_PRIVATE_KEY"),
-        sdn_mock=__import__("os").environ.get("SDN_MOCK", "true").lower() == "true",
-    )
+    cfg = Config.from_env()
     if cfg.provider_private_key:
         return build_mcp_server(cfg)
     return None, None

@@ -193,10 +193,7 @@ def build_mcp_server(cfg: Config) -> tuple[FastMCP, dict]:
 # Backwards-compat shim — removed when consumer/app.py and consumer/graph.py
 # land on the new factory shape (Tasks 11 and 14).
 def _build_default():
-    import os as _os
-    cfg = Config(
-        consumer_private_key=_os.environ.get("CONSUMER_PRIVATE_KEY"),
-    )
+    cfg = Config.from_env()
     if not cfg.consumer_private_key:
         return None, {}
     return build_mcp_server(cfg)
