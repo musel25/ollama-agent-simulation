@@ -15,5 +15,5 @@ Key modules:
     catalog          — Slot inventory and pricing
     expiry           — Background task: AgreementRequested listener + slot expiry sweep
 
-See docs/04-architecture.md for the full picture.
+See docs/03-architecture.md for the full picture.
 """
