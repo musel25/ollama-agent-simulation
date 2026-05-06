@@ -82,3 +82,50 @@ def render_agent_card(card: dict) -> HTML:
         f"</div>"
     )
     return HTML(body)
+
+
+def render_mcp_tools(mcp) -> HTML:
+    """Render every tool registered on a FastMCP server as an HTML card grid.
+
+    Reads `mcp._local_provider._components` (FastMCP internals) and renders
+    name + description + JSON Schema (input/output) for each tool.
+    """
+    components = getattr(getattr(mcp, "_local_provider", None),
+                         "_components", {}) or {}
+    tools = [v for k, v in components.items() if k.startswith("tool:")]
+
+    cards: list[str] = []
+    for t in tools:
+        name = _html.escape(getattr(t, "name", "?"))
+        desc = _html.escape(getattr(t, "description", "") or "")
+        schema = getattr(t, "input_schema", None) or getattr(t, "schema", None)
+        try:
+            schema_json = json.dumps(schema, indent=2, default=str) if schema else "{}"
+        except Exception:
+            schema_json = str(schema)
+        cards.append(
+            f"<div style='border:1px solid #ddd;border-radius:8px;padding:12px;"
+            f"margin:6px;flex:1 1 320px;max-width:380px'>"
+            f"<div style='font-weight:600;font-family:monospace'>{name}</div>"
+            f"<div style='color:#555;font-size:13px;margin:4px 0'>{desc}</div>"
+            f"<details><summary style='cursor:pointer;font-size:12px;color:#06c'>"
+            f"input schema</summary>"
+            f"<pre style='background:#f6f8fa;padding:8px;border-radius:4px;"
+            f"font-size:12px;overflow-x:auto'>"
+            f"{_html.escape(schema_json)}</pre></details>"
+            f"</div>"
+        )
+    grid = (
+        f"<div style='display:flex;flex-wrap:wrap'>"
+        f"{''.join(cards)}"
+        f"</div>"
+    )
+    header = (
+        f"<div style='font-family:system-ui'>"
+        f"<div style='font-weight:600;margin-bottom:6px'>"
+        f"FastMCP server: {_html.escape(getattr(mcp, 'name', '?'))} "
+        f"<span style='color:#888;font-size:12px'>"
+        f"({len(tools)} tools)</span></div>"
+        f"{grid}</div>"
+    )
+    return HTML(header)
