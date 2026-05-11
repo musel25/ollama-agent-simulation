@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-11
 **Status:** design approved, pending spec review
-**Scope:** paper restructure into a *new* `.tex` file (leave `main.tex` untouched) + a *new* slides `.tex` file (leave `slides.tex` untouched) + an upgraded applicability table. Assumes the telemetry-configuration provider agent / activation machinery already exists (per author); if it does not, that implementation is a separate effort tracked elsewhere.
+**Scope:** paper restructure into a *new* `.tex` file (leave `main.tex` untouched) + a *new* slides `.tex` file (leave `slides.tex` untouched) + an upgraded applicability table. The telemetry-configuration provider agent / activation machinery is **assumed to exist and run for real** (per author) — Instance B is therefore a genuinely *demonstrated* instance on par with the bandwidth PoC; this spec does not cover that implementation.
 
 ---
 
@@ -129,5 +129,5 @@ Start from a copy of `slides.tex`; mirror the paper's new spine:
 ## 6. Open items / risks
 - **Page budget** (two-column, ~6 pp): the second instance + new table + RQ3 + threat-model paragraph add length. Mitigation: present Instance B as "everything reused except these three things"; keep the applicability table to ~6 rows; threat model is one tight paragraph.
 - **The conceptual overview figure** needs a real drawn asset eventually; TikZ placeholder acceptable for now.
-- **Does the telemetry PoC actually exist / run?** Spec assumes yes (per author). If "what's real" for Instance B can't be backed by a real run, either (a) build the minimal real path, or (b) honestly mark Instance B's activation as demonstrated-in-mock with the real path specified — but that weakens the "two demonstrated instances" claim and should be a conscious call.
-- **`main-v2.tex` / `slides-v2.tex` filenames** — placeholders; rename if the author prefers something else.
+- **Telemetry PoC reality:** confirmed real (per author) — Instance B's "what's real" list is written on the same footing as Instance A's; no hedging language.
+- **`main-v2.tex` / `slides-v2.tex` filenames** — accepted.
