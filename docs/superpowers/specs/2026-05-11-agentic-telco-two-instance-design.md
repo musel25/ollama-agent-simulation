@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-11
 **Status:** design approved, pending spec review
-**Scope:** paper restructure into a *new* `.tex` file (leave `main.tex` untouched) + matching slides update + an upgraded applicability table. Assumes the telemetry-configuration provider agent / activation machinery already exists (per author); if it does not, that implementation is a separate effort tracked elsewhere.
+**Scope:** paper restructure into a *new* `.tex` file (leave `main.tex` untouched) + a *new* slides `.tex` file (leave `slides.tex` untouched) + an upgraded applicability table. Assumes the telemetry-configuration provider agent / activation machinery already exists (per author); if it does not, that implementation is a separate effort tracked elsewhere.
 
 ---
 
@@ -24,7 +24,8 @@ The narrative anchor is **"agentic telco as platform"**: a telco exposes network
 |---|---|
 | `paper/main-v2.tex` | **new** — full restructured paper (copy of `main.tex` as starting point, then restructured per §4) |
 | `paper/main.tex` | **untouched** |
-| `paper/slides.tex` | edited to match the new framing/structure |
+| `paper/slides-v2.tex` | **new** — restructured slides (copy of `slides.tex` as starting point, then restructured per §5) |
+| `paper/slides.tex` | **untouched** |
 | `paper/references.bib` | add only if new citations are needed (e.g., a capability-security reference for the reference-monitor framing — optional) |
 | `paper/diagrams/` | new conceptual figure: "agentic telco as platform" overview (three layers × four elements × six-stage arrow forking at stage 6). May start as a TikZ block inside the `.tex` or a placeholder pending a drawn asset. |
 
@@ -113,9 +114,9 @@ Start from a copy of `main.tex`; apply:
   - `d2_sequence_6stages`: stays; add a caption note that arrows 1–5 are class-invariant.
   - `d3_architecture_stack`: stays; minor caption tweak to mention the two activation primitives.
 
-## 5. Slides restructure (`slides.tex`)
+## 5. Slides restructure (`slides-v2.tex` — new file, `slides.tex` untouched)
 
-Mirror the paper's new spine:
+Start from a copy of `slides.tex`; mirror the paper's new spine:
 - Title/intro: "agentic telco as platform" framing.
 - One slide for the three-layer / four-element architecture.
 - One slide for the six-stage workflow with the stage-6 fork highlighted.
@@ -129,4 +130,4 @@ Mirror the paper's new spine:
 - **Page budget** (two-column, ~6 pp): the second instance + new table + RQ3 + threat-model paragraph add length. Mitigation: present Instance B as "everything reused except these three things"; keep the applicability table to ~6 rows; threat model is one tight paragraph.
 - **The conceptual overview figure** needs a real drawn asset eventually; TikZ placeholder acceptable for now.
 - **Does the telemetry PoC actually exist / run?** Spec assumes yes (per author). If "what's real" for Instance B can't be backed by a real run, either (a) build the minimal real path, or (b) honestly mark Instance B's activation as demonstrated-in-mock with the real path specified — but that weakens the "two demonstrated instances" claim and should be a conscious call.
-- **`main-v2.tex` filename** — placeholder; rename if the author prefers something else.
+- **`main-v2.tex` / `slides-v2.tex` filenames** — placeholders; rename if the author prefers something else.
