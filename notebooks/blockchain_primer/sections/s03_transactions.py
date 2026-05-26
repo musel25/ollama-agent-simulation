@@ -50,7 +50,7 @@ def cells() -> list[dict]:
             "- **`nonce`** — counter per sender; prevents replay. Alice's first tx is nonce 0.\n"
             "- **`gas`, `gasPrice`** — the fee budget.\n"
             "- **`input`** — empty for a plain transfer; we'll see it filled later.\n"
-            "- **`v`, `r`, `s`** — the ECDSA signature.\n"
+            "- **`r`, `s`, `yParity`** — the ECDSA signature fields. (Type-2 / EIP-1559 transactions use `yParity` instead of the legacy `v`.)\n"
             "\n"
             "The **receipt** is the post-execution summary."
         ),
