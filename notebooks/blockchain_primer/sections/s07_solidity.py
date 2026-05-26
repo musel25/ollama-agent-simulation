@@ -1,0 +1,100 @@
+"""§7 — Solidity syntax via HelloWorld.sol → mapped to BandwidthEscrow."""
+from __future__ import annotations
+from ._helpers import md, code
+
+
+def cells() -> list[dict]:
+    return [
+        md(
+            "## 7. Solidity syntax via `HelloWorld.sol`\n"
+            "\n"
+            "Time to read Solidity, not just call it. `HelloWorld.sol` is tiny but "
+            "uses every feature `BandwidthEscrow` does. We'll deploy it, exercise "
+            "each feature, and map it to where the same feature appears in the real "
+            "escrow contract.\n"
+            "\n"
+            "```solidity\n"
+            "contract HelloWorld {\n"
+            "    address public owner;\n"
+            "    mapping(address => uint256) public greetings;\n"
+            "\n"
+            "    event Greeted(address indexed who, uint256 count);\n"
+            "    error NotOwner();\n"
+            "    error SendSomething();\n"
+            "\n"
+            "    constructor() { owner = msg.sender; }\n"
+            "\n"
+            "    function greet() external payable {\n"
+            "        if (msg.value == 0) revert SendSomething();\n"
+            "        greetings[msg.sender] += 1;\n"
+            "        emit Greeted(msg.sender, greetings[msg.sender]);\n"
+            "    }\n"
+            "\n"
+            "    function withdraw() external {\n"
+            "        if (msg.sender != owner) revert NotOwner();\n"
+            "        (bool ok, ) = msg.sender.call{value: address(this).balance}(\"\");\n"
+            "        require(ok, \"transfer failed\");\n"
+            "    }\n"
+            "}\n"
+            "```"
+        ),
+        code(
+            "output = run([\n"
+            "    'forge', 'create', 'contracts/HelloWorld.sol:HelloWorld',\n"
+            "    '--private-key', ALICE_PK, '--rpc-url', RPC, '--broadcast',\n"
+            "])\n"
+            "import re\n"
+            "m = re.search(r'Deployed to:\\s*(0x[0-9a-fA-F]{40})', output)\n"
+            "assert m, output\n"
+            "HELLO = m.group(1)\n"
+            "print(f'\\nHelloWorld at: {HELLO}')"
+        ),
+        code(
+            "# Alice greets twice, paying 0.1 ETH each time.\n"
+            "for _ in range(2):\n"
+            "    run(['cast', 'send', HELLO, 'greet()', '--value', '0.1ether',\n"
+            "         '--private-key', ALICE_PK, '--rpc-url', RPC])\n"
+            "\n"
+            "# Read her greet count from the mapping.\n"
+            "count = run(['cast', 'call', HELLO, 'greetings(address)(uint256)',\n"
+            "             ALICE, '--rpc-url', RPC])\n"
+            "print(f'\\nAlice greeted {count} times')"
+        ),
+        code(
+            "# Owner check: Bob tries to withdraw, should revert NotOwner.\n"
+            "run(['cast', 'send', HELLO, 'withdraw()',\n"
+            "     '--private-key', BOB_PK, '--rpc-url', RPC], check=False)\n"
+            "print('(Bob failed as expected)')"
+        ),
+        code(
+            "# Alice withdraws successfully.\n"
+            "run(['cast', 'send', HELLO, 'withdraw()',\n"
+            "     '--private-key', ALICE_PK, '--rpc-url', RPC])\n"
+            "bal = run(['cast', 'balance', HELLO, '--rpc-url', RPC])\n"
+            "print(f'\\nHelloWorld balance: {bal} wei (should be 0)')"
+        ),
+        md(
+            "### Feature map: HelloWorld → BandwidthEscrow\n"
+            "\n"
+            "| Concept | In HelloWorld | In BandwidthEscrow |\n"
+            "|---|---|---|\n"
+            "| `pragma solidity ^0.8.20;` | line 2 | line 2 |\n"
+            "| `mapping(K => V)` | `greetings` | `_agreements` (id → Agreement) |\n"
+            "| `struct` | — | `Agreement`, `TokenMetadata` |\n"
+            "| `enum` | — | `Status { NONE, REQUESTED, ACTIVE, CLOSED, CANCELLED }` |\n"
+            "| `event ... indexed` | `Greeted(address indexed who, uint256)` | `AgreementRequested(uint256 indexed, address indexed, address indexed, ...)` |\n"
+            "| custom `error` + `revert Foo()` | `NotOwner`, `SendSomething` | `NotProvider`, `WrongStatus`, `MetadataMismatch`, … |\n"
+            "| `msg.sender` | `withdraw()` ownership check | every function's authorization check |\n"
+            "| `msg.value` + `payable` | `greet() external payable` | `requestAgreement(...) external payable` |\n"
+            "| `block.timestamp` | — | `requestDeadline = block.timestamp + 1 hours` |\n"
+            "| `external` vs `public` | both | all entry points `external` |\n"
+            "| Low-level `call{value: ...}(\"\")` | `withdraw()` | `ag.provider.call{value: ag.priceWei}(\"\")` |\n"
+            "| Constructor | sets `owner` | sets `nftContract` (immutable) |\n"
+            "\n"
+            "**Storage vs memory** (not exercised here, used in escrow): `storage` "
+            "is a *reference* to on-chain state (writes persist). `memory` is a "
+            "scratch copy for the duration of the call. In `deposit()` you'll see "
+            "`Agreement storage ag = _agreements[id];` — writes to `ag.status` "
+            "actually mutate the mapping."
+        ),
+    ]
