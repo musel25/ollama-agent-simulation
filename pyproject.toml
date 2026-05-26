@@ -19,6 +19,16 @@ dependencies = [
     "web3>=6.0,<7",
 ]
 
+[project.optional-dependencies]
+from-scratch = [
+  "coincurve>=19.0",
+  "pycryptodome>=3.20",
+  "rlp>=4.0",
+  "requests>=2.31",
+  "jupyterlab>=4.0",
+  "matplotlib>=3.8",
+]
+
 [dependency-groups]
 dev = [
     "ipykernel>=7.2.0",
