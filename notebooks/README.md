@@ -11,6 +11,10 @@ four; MCP and A2A each get three.
 - `anvil` + `forge` on PATH (install from [Foundry](https://book.getfoundry.sh/getting-started/installation))
 - For `06_end_to_end.ipynb` only: `ollama` running locally with `llama3.2:3b` pulled
 
+## Beginner primer
+
+New to blockchain or Solidity? Start with **[blockchain_primer/](blockchain_primer/)** — a hands-on, ground-up tour of accounts, transactions, the EVM, and Solidity, driven by a local `anvil` chain. It ends with a guided read of `contracts/src/BandwidthEscrow.sol`. Run it before `01a` if you've never deployed a smart contract.
+
 ## Setup
 
 ```bash
