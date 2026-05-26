@@ -15,6 +15,10 @@ four; MCP and A2A each get three.
 
 New to blockchain or Solidity? Start with **[blockchain_primer/](blockchain_primer/)** — a hands-on, ground-up tour of accounts, transactions, the EVM, and Solidity, driven by a local `anvil` chain. It ends with a guided read of `contracts/src/BandwidthEscrow.sol`. Run it before `01a` if you've never deployed a smart contract.
 
+## From-scratch deep dive
+
+Want to understand HOW the primer works under the hood? **[from_scratch/](from_scratch/)** is a 10-notebook series that builds every Ethereum primitive by hand in Python — keys, signatures, RLP, a toy chain, real-TCP networking with `tcpdump` debugging, P2P gossip, fork choice & reorgs, a Merkle-Patricia trie, and a toy EVM that disassembles real compiled bytecode. No web3.py, no shortcuts. Stops just before Solidity — at which point the `blockchain_primer/` picks up.
+
 ## Setup
 
 ```bash
