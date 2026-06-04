@@ -2,7 +2,11 @@
 
 A hands-on, ground-up walkthrough of blockchain accounts, transactions, the EVM, and Solidity — driven by a local `anvil` chain through `cast` and `forge`. Ends with a guided read of `contracts/src/BandwidthEscrow.sol`.
 
-Open **[01a0_blockchain_primer.ipynb](01a0_blockchain_primer.ipynb)** and run top to bottom.
+Open **[`01a0_blockchain_primer.py`](01a0_blockchain_primer.py)** in marimo and run top to bottom:
+
+```bash
+uv run marimo edit notebooks/blockchain_primer/01a0_blockchain_primer.py
+```
 
 **Requirements:** Foundry (`anvil`, `cast`, `forge`) on `PATH`. Verify with `anvil --version`.
 

@@ -11,6 +11,7 @@ import uvicorn
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.server.tasks import InMemoryTaskStore
+from eth_account import Account
 from fastapi import FastAPI, HTTPException, Request
 from fastmcp import Client as MCPClient
 from google.protobuf.json_format import MessageToDict
@@ -91,7 +92,6 @@ def get_inventory() -> list[dict]:
 @app.get("/address")
 def provider_address(request: Request) -> dict:
     cfg: Config = request.app.state.cfg
-    from eth_account import Account
     return {"address": Account.from_key(cfg.provider_private_key).address}
 
 

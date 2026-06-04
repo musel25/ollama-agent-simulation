@@ -1,9 +1,16 @@
-"""Assemble 01a0_blockchain_primer.ipynb from sections/*.py modules."""
+"""Assemble 01a0_blockchain_primer.py (marimo) from sections/*.py modules.
+
+Each section module exposes a ``cells()`` function returning notebook cells in
+Jupyter's nbformat dict shape. We assemble an ``nbformat`` notebook in memory,
+write it to a temp file, then run ``marimo convert`` to produce the final
+marimo notebook that lives next to this script.
+"""
 from __future__ import annotations
-import importlib, pathlib, nbformat
+import importlib, pathlib, subprocess, sys, tempfile
+import nbformat
 
 HERE = pathlib.Path(__file__).parent
-NB_PATH = HERE / "01a0_blockchain_primer.ipynb"
+NB_PATH = HERE / "01a0_blockchain_primer.py"
 
 SECTION_MODULES = [
     "sections.s00_setup",
@@ -22,7 +29,6 @@ SECTION_MODULES = [
 
 
 def main() -> None:
-    import sys
     sys.path.insert(0, str(HERE))
     nb = nbformat.v4.new_notebook()
     nb.metadata = {
@@ -34,13 +40,22 @@ def main() -> None:
         try:
             mod = importlib.import_module(mod_name)
         except ModuleNotFoundError:
-            # Section not yet implemented — skip during incremental build.
             print(f"skip (missing): {mod_name}")
             continue
         cells.extend(mod.cells())
         print(f"  + {mod_name}: {len(mod.cells())} cells")
     nb.cells = cells
-    nbformat.write(nb, NB_PATH)
+
+    with tempfile.NamedTemporaryFile(suffix=".ipynb", delete=False) as tmp:
+        tmp_path = pathlib.Path(tmp.name)
+    try:
+        nbformat.write(nb, tmp_path)
+        subprocess.run(
+            ["marimo", "-q", "-y", "convert", str(tmp_path), "-o", str(NB_PATH)],
+            check=True,
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
     print(f"wrote {NB_PATH} ({len(cells)} cells)")
 
 

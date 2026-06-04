@@ -113,6 +113,7 @@ services:
     environment:
       - CONSUMER_BASE_URL=http://consumer-agent:8001
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:3b}
+      - SDN_MOCK=${SDN_MOCK:-true}
     entrypoint: ["streamlit", "run", "consumer/ui.py",
                  "--server.port", "8501", "--server.address", "0.0.0.0"]
 

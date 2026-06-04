@@ -13,7 +13,7 @@ It's the working proof-of-concept that backs the paper *"Autonomous Agent-to-Age
 ## Two ways to run it
 
 - **Docker stack** (`make up && make demo`) — everything runs in containers; the dashboard at `http://localhost:8501` shows the live trade.
-- **Notebooks** (`notebooks/01_*.ipynb` … `05_*.ipynb`) — every layer is exercised in-process from Python. No Docker required (only the `anvil`/`forge` binaries from Foundry, plus optionally `ollama`).
+- **Notebooks** (`notebooks/*.py`, [marimo](https://marimo.io) reactive notebooks) — every layer is exercised in-process from Python. No Docker required (only the `anvil`/`forge` binaries from Foundry, plus optionally `ollama`).
 
 ## Reading order
 
@@ -21,7 +21,7 @@ It's the working proof-of-concept that backs the paper *"Autonomous Agent-to-Age
 2. `02-concepts.md` — the vocabulary used in everything else.
 3. `03-architecture.md` — how the pieces fit, and where to make changes.
 4. `04-running.md` — how to actually get it running, both paths.
-5. `notebooks/05_end_to_end.ipynb` — see the whole flow from a Python kernel.
+5. `notebooks/06_end_to_end.py` — see the whole flow from a Python kernel.
 
 ## Glossary (one-liners)
 

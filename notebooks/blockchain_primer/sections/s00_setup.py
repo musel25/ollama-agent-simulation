@@ -23,9 +23,9 @@ def cells() -> list[dict]:
         ),
         code(
             "# --- Notebook runtime setup ---------------------------------------\n"
-            "import atexit, subprocess, time, shutil, sys, pathlib, json, os\n"
+            "import atexit, subprocess, time, shutil, sys, pathlib, json\n"
             "\n"
-            "PRIMER_DIR = pathlib.Path.cwd().resolve()\n"
+            "PRIMER_DIR = pathlib.Path(__file__).resolve().parent\n"
             "REPO_ROOT = PRIMER_DIR.parent.parent\n"
             "RPC = 'http://127.0.0.1:8545'\n"
             "\n"
@@ -45,11 +45,11 @@ def cells() -> list[dict]:
         ),
         code(
             "# --- Start anvil --------------------------------------------------\n"
-            "_anvil_proc = subprocess.Popen(\n"
+            "anvil_proc = subprocess.Popen(\n"
             "    ['anvil', '--host', '127.0.0.1', '--port', '8545', '--silent'],\n"
             "    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,\n"
             ")\n"
-            "atexit.register(_anvil_proc.terminate)\n"
+            "atexit.register(anvil_proc.terminate)\n"
             "\n"
             "# Wait for RPC to respond.\n"
             "for _ in range(30):\n"
@@ -60,6 +60,6 @@ def cells() -> list[dict]:
             "        time.sleep(0.2)\n"
             "else:\n"
             "    raise RuntimeError('anvil did not come up')\n"
-            "print(f'anvil PID={_anvil_proc.pid}')"
+            "print(f'anvil PID={anvil_proc.pid}')"
         ),
     ]

@@ -135,7 +135,7 @@ def cells() -> list[dict]:
             "---\n"
             "\n"
             "**You're done.** The reference doc you'll want open while reading "
-            "future contracts is [01a — chain contract model](../01a_chain_contract_model.ipynb), "
-            "and the lifecycle walkthrough is [01b — escrow lifecycle](../01b_chain_escrow_lifecycle.ipynb)."
+            "future contracts is [01a — chain contract model](../01a_chain_contract_model.py), "
+            "and the lifecycle walkthrough is [01b — escrow lifecycle](../01b_chain_escrow_lifecycle.py)."
         ),
     ]

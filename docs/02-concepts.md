@@ -167,7 +167,7 @@ Modern LLMs can do more than generate text — they can call functions. You send
 
 Tool calling is what makes an LLM an agent rather than just a chatbot. Without tools the model can only produce text; with tools it can execute code, read files, call APIs, send transactions, and observe the results.
 
-**In this project:** the consumer's MCP server (`consumer/mcp_server.py`) defines the tools the LLM can invoke — `browse_catalog`, `request_quote`, `present_credential`, `lock_payment`, `await_settlement`, `wallet_address`, and `sign_message`. The LangGraph nodes in `consumer/graph.py` import these tool functions directly from `consumer/mcp_server.py` and call them as plain async coroutines — there is no MCP round-trip inside the graph. An in-memory `MCPClient` is instantiated separately in `consumer/app.py` and used for the `/catalog_proxy` and `/address` REST endpoints, demonstrating both invocation styles.
+**In this project:** the consumer's MCP server (`consumer/mcp_server.py`) defines the tools the consumer agent invokes — `wallet_address`, `lock_payment`, `await_settlement`, `verify_credential` (local/on-chain), and `discover_provider`, `browse_catalog`, `request_quote`, `present_credential` (A2A-bound). The LangGraph nodes in `consumer/graph.py` receive these as a `tools` dict from `build_consumer_tools(cfg)` and call them as plain coroutines — there is no MCP round-trip inside the graph. An in-memory `MCPClient` is instantiated separately in `consumer/app.py` and used by the `/catalog_proxy`, `/address`, and `/check_token` REST endpoints, demonstrating both invocation styles.
 
 ---
 

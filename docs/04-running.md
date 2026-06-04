@@ -325,21 +325,27 @@ After `make demo` completes you should see three JSON blocks:
 ]
 ```
 
-**(2) Chat response** — the consumer agent's reply with the purchase
-result embedded:
+**(2) Chat response** — the consumer agent's reply with the inter-agent
+log and the LLM's per-node thinking trace:
 
 ```json
 {
-  "response": "I have secured a medium bandwidth package ...",
-  "agreementId": "0x...",
-  "tokenId": "1",
-  "mbps": 5,
-  "endpoint": "192.168.3.10:5000"
+  "response": "Active service — medium tier (5 Mbps), agreementId=..., tokenId=1.",
+  "log": [
+    {"from": "consumer", "message": "[A2A] discover_provider({\"provider_url\": \"http://provider-agent:8002\"})"},
+    {"from": "consumer", "message": "Chose medium (5 Mbps) from http://provider-agent:8002 at 20000000000000000 wei"},
+    {"from": "consumer", "message": "requestAgreement() sent. tx=0x..."},
+    {"from": "consumer", "message": "Agreement ACTIVE. tokenId=1"},
+    {"from": "consumer", "message": "On-chain verification OK: tokenId=1 grants 5 Mbps for 600s (endpoint=clab://pe1/ethernet-1/3.0)"}
+  ],
+  "thinking": ["pick_tier raw: 'medium'", "summary raw: 'OK done.'"]
 }
 ```
 
-The `agreementId` is the on-chain escrow ID. The `tokenId` is the NFT minted
-by the provider. Both fields being present confirms the atomic swap succeeded.
+A `response` starting with `Active service` and an `Agreement ACTIVE`
+log entry confirm the atomic swap succeeded. The endpoint follows the
+`clab://{pe}/{subinterface}` format, recording which physical slot the
+NFT credential is bound to.
 
 **(3) Inventory** — the provider's slot table after the purchase. One slot
 in the `medium` tier should now show a taken entry with an expiry timestamp,
@@ -596,21 +602,25 @@ The `notebooks/` directory contains five Jupyter notebooks that exercise every l
 
 - `anvil` + `forge` (install from [Foundry](https://book.getfoundry.sh/getting-started/installation))
 - Python 3.13 + `uv`
-- For notebook 05 only: `ollama serve` running with `llama3.2:3b` pulled (`ollama pull llama3.2:3b`)
+- For notebook 06 only: `ollama serve` running with `llama3.2:3b` pulled (`ollama pull llama3.2:3b`)
 
 ### Run
 
+The pedagogical series is authored as [marimo](https://marimo.io) reactive notebooks — plain `.py` files, no JSON, clean git diffs, no stale-state surprises.
+
 ```bash
 uv sync
-uv run jupyter lab notebooks/
+uv run marimo edit notebooks/
 ```
 
-Open the notebooks in order:
+Open the notebooks in order (see [`notebooks/README.md`](../notebooks/README.md) for the full 21-notebook table):
 
-1. `01_chain.ipynb` — deploy the contracts, walk one trade.
-2. `02_mcp.ipynb` — exercise the provider's MCP tools in-process.
-3. `03_a2a.ipynb` — drive the provider's A2A executor without a port.
-4. `04_consumer_graph.ipynb` — step through the consumer's LangGraph state machine.
-5. `05_end_to_end.ipynb` — full negotiation, end-to-end (uses Ollama).
+1. `01a_chain_contract_model.py` … `01d_chain_walkthrough.py` — Solidity model, escrow lifecycle, deploy + walk one trade.
+2. `02a_mcp_concepts.py` … `02c_mcp_walkthrough.py` — exercise the provider's MCP tools in-process.
+3. `03a_a2a_concepts.py` … `03c_a2a_walkthrough.py` — drive the provider's A2A executor without a port.
+4. `04a_graph_state_schema.py` … `04d_graph_walkthrough.py` — step through the consumer's LangGraph state machine.
+5. `05a_inventory_and_expiry.py` — SlotPool, event listener, expiry sweep.
+6. `06_end_to_end.py` — full negotiation, end-to-end (uses Ollama).
+7. `07a_network_concepts.py` … `07d_network_router_config.py` — the SDN/bandwidth-enforcement layer.
 
-Each notebook is self-contained: it spins up everything it needs in a `try`, demonstrates the layer, and tears down in a `finally`.
+Each walkthrough notebook is self-contained: it spins up everything it needs in a `try`, demonstrates the layer, and tears down in a `finally`.

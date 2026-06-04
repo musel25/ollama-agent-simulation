@@ -12,3 +12,7 @@ contracts/deployments/local.json
 .solc-cache/
 contracts/broadcast/
 notebooks/.ipynb_checkpoints/
+# marimo / jupyter scratch state
+.jupyter/
+.jupyter_ystore.db
+**/__marimo__/

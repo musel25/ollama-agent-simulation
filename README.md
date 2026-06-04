@@ -11,7 +11,7 @@ This README is a landing page. The full documentation lives in [`docs/`](docs/).
 ## Two ways to run
 
 - **Docker stack** (below): one command brings up Anvil, the agents, Ollama, and the dashboard.
-- **Notebooks** (`notebooks/01_*.ipynb` … `05_*.ipynb`): every layer in-process from Python; no Docker. See [`notebooks/README.md`](notebooks/README.md).
+- **Notebooks** (`notebooks/*.py`, [marimo](https://marimo.io)): every layer in-process from Python; no Docker. See [`notebooks/README.md`](notebooks/README.md).
 
 ---
 
@@ -58,7 +58,7 @@ make clab-down    # tear down the topology
 | Learn the vocabulary | [`docs/02-concepts.md`](docs/02-concepts.md) |
 | Read or modify the code | [`docs/03-architecture.md`](docs/03-architecture.md) |
 | Get it running on your machine | [`docs/04-running.md`](docs/04-running.md) |
-| See the whole flow from a Python kernel | [`notebooks/05_end_to_end.ipynb`](notebooks/05_end_to_end.ipynb) |
+| See the whole flow from a Python kernel | [`notebooks/06_end_to_end.py`](notebooks/06_end_to_end.py) |
 
 If you've never seen this project before: read those docs in the order listed.
 

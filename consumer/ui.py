@@ -44,7 +44,7 @@ st.markdown("""
     --accent-active: #3b82f6;
   }
   section[data-testid="stSidebar"] { width: 240px !important; min-width: 240px !important; }
-  .block-container { padding-top: 1.6rem !important; padding-bottom: 1rem !important; max-width: 1600px; }
+  .block-container { padding-top: 3.5rem !important; padding-bottom: 1rem !important; max-width: 1600px; }
   .stApp { background: var(--bg-page); }
 
   .panel { background: var(--bg-panel); border: 1px solid var(--border);
@@ -102,11 +102,13 @@ with st.sidebar:
         st.rerun()
 
 CONSUMER_TOOLS = [
+    ("discover_provider",  "a2a",      False),
     ("browse_catalog",     "a2a",      False),
     ("request_quote",      "a2a",      False),
     ("lock_payment",       "on-chain", False),
     ("await_settlement",   "on-chain", False),
     ("present_credential", "a2a",      False),
+    ("verify_credential",  "on-chain", False),
     ("wallet_address",     "local",    True),   # ambient
 ]
 
@@ -631,6 +633,9 @@ def render_nft_strip() -> None:
       </div>
     ''', unsafe_allow_html=True)
 
+    with st.expander("🪪 NFT receipt (raw)", expanded=False):
+        st.json({"tokenId": tid, **data})
+
 
 def render_iperf_expander() -> None:
     tid = _active_token_id()
@@ -751,13 +756,17 @@ def render_pipeline() -> None:
 render_header()
 render_pipeline()
 
-col_l, col_c, col_r = st.columns([1, 1.2, 1])
-with col_l:
-    render_consumer_panel()
-with col_c:
-    render_wire_panel()
-with col_r:
-    render_provider_panel()
+trig_l, trig_r = st.columns([1, 1])
+with trig_l:
+    with st.popover("🛒 Consumer Agent — wallet · skills · tools",
+                    use_container_width=True):
+        render_consumer_panel()
+with trig_r:
+    with st.popover("🏪 Provider Agent — wallet · skills · tools",
+                    use_container_width=True):
+        render_provider_panel()
+
+render_wire_panel()
 
 bottom_l, bottom_r = st.columns([1, 1])
 with bottom_l:

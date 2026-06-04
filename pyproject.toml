@@ -11,6 +11,7 @@ dependencies = [
     "httpx>=0.28.1",
     "langchain-ollama>=1.1.0",
     "langgraph>=1.1.10",
+    "marimo",
     "ollama>=0.6.1",
     "protobuf>=5,<7",
     "srl-bandwidth",

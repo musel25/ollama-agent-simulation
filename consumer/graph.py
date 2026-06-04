@@ -57,7 +57,7 @@ async def _call_tool(tools: ToolMap, name: str, *args, **kwargs) -> str:
     out = fn(*args, **kwargs)
     if asyncio.iscoroutine(out):
         return await out
-    return await asyncio.to_thread(lambda: out) if False else out
+    return out
 
 
 def _log_call(state: WorkflowState, tool_name: str, args: dict) -> None:

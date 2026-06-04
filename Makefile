@@ -2,7 +2,7 @@
 
 up:
 	@mkdir -p contracts/deployments
-	docker compose up --build -d
+	docker compose up --build -d --remove-orphans
 	@echo "Services starting... UI at http://localhost:8501"
 
 up-real:

@@ -7,11 +7,11 @@ def cells() -> list[dict]:
     return [
         md("## Teardown\n\nKill the anvil process. Re-run this notebook from the top to start fresh."),
         code(
-            "if '_anvil_proc' in dir() and _anvil_proc.poll() is None:\n"
-            "    _anvil_proc.terminate()\n"
-            "    _anvil_proc.wait(timeout=5)\n"
+            "if anvil_proc.poll() is None:\n"
+            "    anvil_proc.terminate()\n"
+            "    anvil_proc.wait(timeout=5)\n"
             "    print('anvil stopped')\n"
             "else:\n"
-            "    print('anvil was not running (or already stopped)')"
+            "    print('anvil was already stopped')"
         ),
     ]
